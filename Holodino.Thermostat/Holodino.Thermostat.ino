@@ -1,235 +1,256 @@
-#include <Wire.h>
 #include <PID_v1.h>
+#include <Sodaq_DS3231.h>
 #include <Adafruit_GFX.h>
 #include <Adafruit_SSD1306.h>
-#include <Adafruit_Sensor.h>
-#include <Adafruit_BMP085_U.h>
 
-#define PRODUCT "HOLODINO"
-#define VERSION "v.1.0"
-#define MODULE  "Thermostat"
-#define AUTHOR  "A.Olkhovoy"
-#define EMAIL   "ao@ze1.org"
+#define PRODUCT       "HOLODINO"
 
-// SETUP: PID CONTROLLER PARAMETERS
-// ================================
-#define TEMP_TARGET  -18.0
-#define INITIAL_PID_P 2
-#define INITIAL_PID_I 5
-#define INITIAL_PID_D 10
-double ctrl_input = -273, ctrl_output = 0, ctrl_target = TEMP_TARGET;
-PID ctrl(&ctrl_input, &ctrl_output, &ctrl_target, INITIAL_PID_P, INITIAL_PID_I, INITIAL_PID_D, REVERSE);
+#define TEMP_TARGET       -18.0
+#define INITIAL_PID_P        30
+#define INITIAL_PID_I        60
+#define INITIAL_PID_D       270
 
-#define START_DELAY   4 * 60
-#define WINDOW_SIZE   20 * 60
+#define START_DELAY         270
+#define WINDOW_SIZE        1200
 
-#define TEST_MODE
+//#define TEST_MODE
 #ifdef TEST_MODE
-#define TEST_TIME_SPEED           10.0
-#define TEST_TEMP_START          +20.0
-#define TEST_TEMP_DEGREE_MSEC_ON  -0.000010
-#define TEST_TEMP_DEGREE_MSEC_OFF +0.000005
+#define TIME_SPEED          10.0
+#define TEMP_INITIAL      +20.0
+#define TEMP_RATE_ON     -0.10
+#define TEMP_RATE_OFF     0.01
 #endif
 
-// INPUT: BARO/THERMO MODULE (BMP085/BMP180)
-// =========================================
-//  + Connect SCL to analog 5
-//  + Connect SDA to analog 4
-//  + Connect VDD to +3.3V DC
-//  + Connect GROUND to common ground
-Adafruit_BMP085_Unified bmp = Adafruit_BMP085_Unified(10085);
-
-// OUTPUT: MOTOR RELAY DIGITAL SIGNAL
+// OUTPUT: MOTOR RELAY SIGNAL PIN#
 // ==================================
 //  + Connect IN  to digital pin
 //  + Connect VCC to power 5V DC
 //  + Connect GND to common ground
-#define OUTPUT_PIN  3
+#define OUTPUT_PIN            6
 
-// DISPLAY: MOTOR RELAY DIGITAL SIGNAL
+// DISPLAY: INTERNAL INFO
 // ==================================
-#define OLED_MOSI   9 // D1
-#define OLED_CLK   10 // D0
-#define OLED_DC    11 //
-#define OLED_CS    12 //
-#define OLED_RESET 13 //
+#define OLED_MOSI             9 // D1
+#define OLED_CLK             10 // D0
+#define OLED_DC              11 //
+#define OLED_CS              12 //
+#define OLED_RESET           13 //
 Adafruit_SSD1306 display(OLED_MOSI, OLED_CLK, OLED_DC, OLED_RESET, OLED_CS);
 
-// ************** HOLODINO TIMERS ************* //
+// ************** HOLODINO TIMER ************* //
 
-#define MIN2(x, y) ((x) < (y) ? (x) : (y))
-#define MAX2(x, y) ((x) > (y) ? (x) : (y))
-
+typedef   signed long  sec;
 typedef unsigned long msec;
 
 class Timer {
 public:
-    Timer() { Reset(); }
-    virtual void Reset() { start_ = millis(); }
-    virtual msec Now() { return millis() - start_; }
+    Timer(double speed) : speed_(speed) { Reset(); }
+    virtual void Reset() { offset_ = millis(); }
+    virtual msec MilliSeconds() { return (millis() - offset_) * speed_; }
+    double speed() { return speed_; }
 private:
-    msec start_;
-};
-
-class VarTimer : public Timer {
-public:
-    VarTimer(double speed) : Timer(), speed_(speed) {}
-    virtual msec Now() { return Timer::Now() * speed_; }
-private:
+    msec offset_;
     double speed_;
 };
+
+struct History {
+    unsigned char Index;
+    signed char Data[128];
+    signed char Min, Max;
+    void Add(signed char value) {
+        if (Index >= sizeof(Data)) {
+            Min = Max = Data[0];
+            for (Index = 0; Index < sizeof(Data) - 1; Index++) {
+                signed char val = Data[Index + 1];
+                if (val < Min) Min = val;
+                if (val > Max) Max = val;
+                Data[Index] = val;
+            }
+        }
+        if (!Index || value < Min) Min = value;
+        if (!Index || value > Max) Max = value;
+        Data[Index++] = value;
+    }
+}
+history;
 
 // **************** HOLODINO STATE ***************** //
 
 class Controller {
 public:
-
-    Controller(double speed, msec duration, msec cooldown) :
-        timer_(speed), duration_(duration), cooldown_(cooldown), 
-        start_(), state_(), num_() {
+    Controller(double speed, sec duration, sec cooldown) :
+        timer_(speed),
+        duration_(duration * 1000),
+        cooldown_(cooldown * 1000), 
+        start_(), hist_(speed), state_(), output_pin_(OUTPUT_PIN),
+        input_(-273), output_(), target_(TEMP_TARGET), pid_(&input_, &output_, &target_, INITIAL_PID_P, INITIAL_PID_I, INITIAL_PID_D, REVERSE) {
     }
-    virtual bool Init() { return true; }
-    virtual bool Input(double &data) = 0;
-    virtual bool Output(bool signal) { return true; }
-
-    enum States { stInit = 0, stStart, stOn, stOff };
-    static const char* StateStr(States state) {
-        switch (state) { case stInit: return "Init"; case stStart: return "Start"; case stOn: return "On"; case stOff: return "Off"; }
-        return "Error";
-    }
-    virtual bool State(States state) {
-        if (state == state_) return false;
-        if (state == stStart) timer_.Reset();
-        state_ = state;
-        start_ = timer_.Now();
+    virtual bool Init() {
+        pid_.SetSampleTime(1000 / timer_.speed());
+        pid_.SetOutputLimits(30, (duration_ - cooldown_) / 1000); // tell the PID to range between 0 and the full window size excluding cooldown time
+        pid_.SetMode(AUTOMATIC); // turn the PID controller on
+        pinMode(output_pin_, OUTPUT); // configure a pin for relay
+        digitalWrite(output_pin_, HIGH);
+        rtc.begin();
         return true;
     }
+    virtual bool Input(double&) = 0;
+    virtual bool Output(bool signal) {
+        digitalWrite(output_pin_, signal ? LOW : HIGH); // turn the output relay pin on/off based on the state
+        return true;
+    }
+    double speed() { return timer_.speed(); }
+    double input() { return input_; }
+    double output() { return output_; }
+    double target() { return target_; }
+    enum States { stInit = 0, stStart, stOn, stOff };
+    static const char* StateStr(States s) { return s == stInit ? "INIT" : s == stStart ? "DELAY" : s == stOn ? "*ON*" : s == stOff ? "OFF" : "ERROR"; }
     States state() { return state_; }
-
-    msec TimeElapsed() {
-        return timer_.Now() - start_;
+    virtual bool State(States s) {
+        if (s == state_) return false;
+        if (s == stStart) timer_.Reset();
+        state_ = s;
+        start_ = timer_.MilliSeconds();
+        return true;
     }
+    msec TimeElapsed() { return timer_.MilliSeconds() - start_; }
     msec TimeLeft() {
-        if (state_ == stInit) return (msec)-1;
-        msec now = timer_.Now(),
-            end = state_ == stStart ? (start_ + cooldown_) : (state_ == stOn ? (start_ + (ctrl_output < 30 ? 0 : ctrl_output * 1000)) : duration_);
-        return now < end ? end - now : 0;
+        msec now = timer_.MilliSeconds();
+        msec end = state_ == stInit ? 1000000000
+            : (state_ == stStart ? cooldown_
+                : (state_ == stOn ? start_ + (output_ < 60.0 ? 0 : output_ * 1000)
+                    : duration_));
+        return end > now ? end - now : 0;
     }
-
     States Execute() {
-        num_++;
         if (state_ == stInit && Init()) State(stStart);
         if (state_ != stInit) {
-            if (!Input(ctrl_input)) State(stInit);
+            if (!Input(input_)) State(stInit);
             else {
-                ctrl.Compute();
-                if (state_ == stStart && !TimeLeft()) State(stOn);
-                if (state_ == stOn && !TimeLeft()) State(stOff);
-                if (!TimeLeft() && (state_ == stOff || State(stOff))) State(stStart);
+                pid_.Compute();
+                if (!TimeLeft())
+                    if (state_ == stStart) State(stOn);
+                    else
+                        if (state_ == stOn) State(stOff);
+                        else State(stStart);
+                        if (!history.Index ||
+                            hist_.MilliSeconds() >= 60000) {
+                            hist_.Reset();
+                            history.Add(input_);
+                        }
             }
         }
         Output(state_ == stOn);
         return state_;
     }
-    unsigned long num() { return num_; }
-
 private:
-
-    VarTimer timer_;
+    Timer timer_;
     msec duration_;
     msec cooldown_;
     msec start_;
+    Timer hist_;
     States state_;
-    unsigned long num_;
+    int output_pin_;
+    double input_;
+    double output_;
+    double target_;
+    PID pid_;
 };
+
+// ***************** HOLODINO ***************** //
+
+#ifndef TEST_MODE
+
+class ControllerRTC : public Controller {
+public:
+    ControllerRTC() :
+        Controller(1.0, WINDOW_SIZE, START_DELAY) {
+    }
+    virtual bool Input(double &temp) {
+        rtc.convertTemperature();
+        temp = rtc.getTemperature();
+        return true;
+    }
+};
+
+ControllerRTC holod;
+
+#else
 
 class ControllerTest : public Controller {
 public:
     ControllerTest() :
-        Controller(TEST_TIME_SPEED, WINDOW_SIZE * 1000, START_DELAY * 1000),
-        input_(TEST_TEMP_START) {
+        Controller(TIME_SPEED, WINDOW_SIZE, START_DELAY),
+        temp_(TEMP_INITIAL) {
     }
-    virtual bool State(States state) override {
-        if (!Controller::State(state)) return false;
-        Input(input_);
-        return true;
+    virtual bool State(States s) {
+        if (s != this->state()) Input(temp_);
+        return Controller::State(s);
     }
-    virtual bool Input(double &data) {
-        data = input_ + TimeElapsed() * (state() == stOn ? TEST_TEMP_DEGREE_MSEC_ON : TEST_TEMP_DEGREE_MSEC_OFF);
-        return true;
-    }
-private:
-    double input_;
-};
-
-/*
-class ControllerBaro : public Controller {
-public:
-    ControllerBaro() :
-        Controller(TEMP_TARGET, 1.0, WINDOW_SIZE, START_DELAY),
-        output_pin_(OUTPUT_PIN) {
-    }
-    virtual bool Initialize() {
-        if (!Controller::Initialize()) return false;
-        pinMode(output_pin_, OUTPUT);
-        if (bmp.begin()) {
-            Serial.println("BARO: INIT SUCCESS");
-            return true;
-        }
-        Serial.println("BARO: INIT ERROR");
-        return false;
-    }
-    virtual void Signal(bool _signal) {
-        Controller::Signal(_signal);
-        digitalWrite(output_pin_, Controller::Signal() ? HIGH : LOW); // turn the output pin on/off based on pid output
-    }
-    virtual bool Temperature(double &temperature) {
-        float temp = -273.0;
-        bmp.getTemperature(&temp);
-        if (temp < -273.15) return false;
-        temperature = temp;
+    virtual bool Input(double &temp) {
+        temp = temp_ + (state() == stOn ? TEMP_RATE_ON : TEMP_RATE_OFF) * TimeElapsed() / 1000;
         return true;
     }
 private:
-    int output_pin_;
+    double temp_;
 };
-*/
-
-// ***************** HOLODINO ***************** //
 
 ControllerTest holod;
 
+#endif // TEST_MODE
+
 void setup() {
-   
-    Serial.begin(9600);
-
     display.begin(SSD1306_SWITCHCAPVCC); // by default, we'll generate the high voltage from the 3.3v line internally
-    display.display();
-
-    ctrl.SetOutputLimits(0, WINDOW_SIZE - START_DELAY); // tell the PID to range between 0 and the full window size excluding cooldown time
-    ctrl.SetMode(AUTOMATIC); // turn the PID controller on
-}
-
-void loop() {
-
-    Controller::States state = holod.Execute();
-
     display.clearDisplay();
     display.setTextSize(1);
     display.setCursor(0, 0);
     display.setTextColor(WHITE);
-    display.println("* " PRODUCT " * " VERSION " *");
-
-    display.print(holod.TimeElapsed() / 1000); display.print(" << "); display.print(holod.StateStr(holod.state()));
-    msec left = holod.TimeLeft(); if (left != (msec)-1) { display.print(" << -"); display.print(left / 1000); }
-    display.println("");
-
-    display.print("t="); if (ctrl_input > 0) display.print("+"); display.print(ctrl_input); display.print("C");
-    display.print(ctrl_input < ctrl_target ? " <= " : " => "); if (ctrl_target > 0) display.print("+"); display.print(ctrl_target); display.print("C");
-    display.print(" <~ "); display.print(ctrl_output); display.println(" sec");
-
+    display.println(PRODUCT);
     display.display();
-    display.invertDisplay(state == Controller::stOn || (state == Controller::stInit && holod.num() % 3 == 0));
-
-    delay(333);
 }
+
+#define VIEW_WIDTH 128
+#define VIEW_HEIGHT 64
+#define HIST_HEIGHT 28
+
+void loop() {
+
+    // EXECUTE PID CONTROLLER CALCULATIONS
+    Controller::States state = holod.Execute();
+
+    // DISPLAY INFO 
+    display.clearDisplay();
+    display.setTextSize(1);
+    display.setCursor(0, 0);
+    display.setTextColor(WHITE);
+
+    // Print current and target temperature values: t=-13.94C => -18.00C
+    display.print("t="); if (holod.input() > 0) display.print("+"); display.print(holod.input()); display.print("C");
+    display.print(holod.input() < holod.target() ? " <= " : " => "); if (holod.target() > 0) display.print("+"); display.print(holod.target()); display.println("C");
+
+    // Print time left, current state and time elapsed: +23 << OFF << -742
+    display.print("+"); display.print(holod.TimeElapsed() / 1000); display.print(" << "); display.print(holod.StateStr(state));
+    sec left = holod.TimeLeft() / 1000; if (left <= 3600) { display.print(" << -"); display.print(left); } display.println("");
+
+    // Print calculated output value, duration in seconds of the ON state: == 920 sec ==
+    display.print("  == "); display.print(holod.output()); display.println(" sec ==");
+
+    // Display historical data chart: temperature by minutes
+    int hist_range = history.Max + 1 - history.Min,
+        hist_space = HIST_HEIGHT - hist_range;
+    float hist_scale = hist_space < 0 ? (float)HIST_HEIGHT / hist_range : 1.0f;
+    int hist_hi = VIEW_HEIGHT - HIST_HEIGHT - 4 + (hist_space < 0 ? 0 : hist_space / 2),
+        hist_lo = hist_hi + hist_scale * hist_range,
+        hist_inp = hist_hi + hist_scale * (history.Max - round(holod.input()));
+    for (int i = 0, x = VIEW_WIDTH - history.Index; i <= history.Index; ++i, ++x) { display.drawPixel(x, hist_hi + hist_scale * (history.Max - history.Data[i]), WHITE); }
+    for (int x = 30; x < VIEW_WIDTH; x += 6) { display.drawPixel(x, hist_hi, WHITE); display.drawPixel(x, hist_lo, WHITE); }
+    for (int x = 40; x < VIEW_WIDTH; x += 2) { display.drawPixel(x, hist_inp, WHITE); }
+    int d = hist_lo - hist_hi; if (d <= 8) { hist_hi -= 4 - d / 2; hist_lo += 4 - (d - d / 2); }
+    display.setCursor(0, hist_hi - 3); display.print("hi:"); if (history.Max > 0) display.print("+"); display.print(history.Max);
+    display.setCursor(0, hist_lo - 3); display.print("lo:"); if (history.Min > 0) display.print("+"); display.print(history.Min);
+    display.display();
+
+    // Delay before next iteration
+    delay(1000 / holod.speed());
+}
+

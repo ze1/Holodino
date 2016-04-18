@@ -12,7 +12,6 @@
 #define _VSARDUINO_H_
 #define __AVR_ATmega328p__
 #define __AVR_ATmega328P__
-#define _VMDEBUG 1
 #define F_CPU 16000000L
 #define ARDUINO 10607
 #define ARDUINO_AVR_UNO
@@ -65,5 +64,4 @@ extern "C" void __cxa_pure_virtual() {;}
 #define portInputRegister(P)
 #define portModeRegister(P)
 #include <..\Holodino.Thermostat\Holodino.Thermostat.ino>
-#include <..\Holodino.Thermostat\index.cpp>
 #endif
