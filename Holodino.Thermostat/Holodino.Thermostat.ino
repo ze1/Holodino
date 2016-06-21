@@ -14,18 +14,19 @@
 
 #define TEST_MODE
 #ifdef TEST_MODE
-#define TIME_SPEED          1.0
-#define TEMP_INITIAL      +20.0
-#define TEMP_RATE_ON      -0.10
-#define TEMP_RATE_OFF      0.01
+	#define TIME_SPEED          1.0
+	#define TEMP_INITIAL      +20.0
+	#define TEMP_RATE_ON      -0.10
+	#define TEMP_RATE_OFF      0.01
 #endif
 
 // DISPLAY: INTERNAL INFO
 // ==================================
 
 #define OLED_DISPLAY
-
 #ifdef OLED_DISPLAY
+	#define DISPLAY_ESP
+	//#define DISPLAY_HOLOD
 	#include <Adafruit_GFX.h>
 	#include <Adafruit_SSD1306.h>
 	#define OLED_MOSI             9 // D1
@@ -41,7 +42,9 @@
 //  + Connect IN  to digital pin
 //  + Connect VCC to power 5V DC
 //  + Connect GND to common ground
-#define OUTPUT_PIN            10
+#define OUTPUT_PIN            2
+
+#define DEBUG_PIN             3 // PWM
 
 // ************** HOLODINO TIMER ************* //
 
@@ -138,8 +141,8 @@ public:
 			history_.Add(input_);
 		}
 		msec td = 1000 / timer_.speed(), te = TimeElapsed(), tt = (msec)(((float)te / (te + TimeLeft())) * td);
-		analogWrite(11, state_ == stStart ? 96 : (state_ == stOn ? 255 : 32)); delay(tt);
-		analogWrite(11, 0); delay(td - tt);
+		analogWrite(DEBUG_PIN, state_ == stStart ? 96 : (state_ == stOn ? 255 : 32)); delay(tt);
+		analogWrite(DEBUG_PIN, 0); delay(td - tt);
         return state_;
     }
 	States state() { return state_; }
@@ -167,35 +170,61 @@ private:
 
 #define esp   Serial        // use Serial1 to talk to esp8266
 
-#define SSID  "HOLODINO"    // change this to match your WiFi SSID
-#define PASS  "9164035980"  // change this to match your WiFi password
-#define PORT  "80"          // using port 8080 by default
+#define SSID  "HOLODINO"    // WiFi SSID
+#define PASS  "9164035980"  // WiFi password
+#define PORT  "80"          // HTTP port
 
-#define BUFFER_SIZE 512
-char buffer[BUFFER_SIZE];
+class Wifi {
+public:
+	Wifi() {
 
-// By default we are looking for OK\r\n
-char OK[] = "OK\r\n";
-
-// wait for at most timeout milliseconds or if OK\r\n is found
-byte esp_wait_for_response(unsigned long timeout = 3000, char* response = OK) {
-	unsigned short index = 0, length = strlen(response);
-	char *buffer = new char(length);
-	bool result = false;
-	timeout += millis();
-	do {
-		delay(1);
-		while (!result && esp.available()) {
-			buffer[index++ % length] = esp.read();
-			result = index >= length;
-			for (unsigned long r = length, b = index; result && r > 0; )
-				result = buffer[--b % length] == response[--r];
-		}
 	}
-	while (!result && millis() < timeout);
-	delete buffer;
-	return result;
+	template<typename T>void print(T c) {
+		esp.print(c);
+		display.print(c);
+	}
+	template<typename T>void print(const T* c) {
+		esp.print(c);
+		display.print(c);
+	}
+	template<typename T>void println(T c) {
+		esp.println(c);
+		display.println(c);
+		display.display();
+	}
+	template<typename T>void println(const T* c) {
+		esp.println(c);
+		display.println(c);
+		display.display();
+	}
+	// wait for at most timeout milliseconds or if OK\r\n is found
+	byte wait_for(const char* response = "OK\r\n", unsigned long timeout = 3000) {
+		unsigned short index = 0, length = strlen(response);
+		char *buffer = new char(length);
+		timeout += millis();
+		bool result = false;
+		do {
+			delay(1);
+			while (!result && esp.available()) {
+				char c = esp.read();
+				buffer[index++ % length] = c;
+				result = index >= length;
+				for (unsigned long r = length, b = index; result && r > 0; )
+					result = buffer[--b % length] == response[--r];
+				display.print(c);
+			}
+			display.display();
+		}
+		while (!result && millis() < timeout);
+		delete buffer;
+		display.display();
+    display.clearDisplay();
+    display.setCursor(0, 0);
+		return result;
+	}
+private:
 }
+wifi;
 
 // ***************** HOLODINO MAIN ***************** //
 
@@ -244,15 +273,50 @@ holod;
 void setup() {
 
 #ifdef OLED_DISPLAY	
-	//display.begin(SSD1306_EXTERNALVCC);
-    display.begin(SSD1306_SWITCHCAPVCC);
-    display.clearDisplay();
-    display.setTextSize(1);
-    display.setCursor(0, 0);
-    display.setTextColor(WHITE);
-    display.println(PRODUCT);
-    display.display();
+	display.begin(SSD1306_SWITCHCAPVCC);
+ // display.begin(SSD1306_EXTERNALVCC);
+	display.clearDisplay();
+	display.setTextSize(1);
+	display.setCursor(0, 0);
+	display.setTextColor(WHITE);
+	display.println(PRODUCT);
+	display.display();
 #endif
+
+	// assume esp8266 operates at 115200 baud rate
+	esp.begin(115200);
+	// try empty AT command
+	wifi.println("AT");
+	wifi.wait_for();
+	// set mode 2 (AP)
+	wifi.println("AT+CWMODE=2");
+	wifi.wait_for();
+	// reset WiFi module
+	wifi.print("AT+RST\r\n");
+	wifi.wait_for();
+	delay(3000);
+
+	// setup AP
+	wifi.print("AT+CWSAP=\""); wifi.print(SSID); wifi.print("\",\""); wifi.print(PASS); wifi.println("\",10,4");
+	// this may take a while, so wait for 5 seconds
+	wifi.wait_for();
+  delay(10000);
+
+	// print device IP address
+	wifi.println("AT+CIFSR");
+	wifi.wait_for();
+
+	// TCP server timeout
+	wifi.println("AT+CIPSTO=300");
+	wifi.wait_for();
+
+	// start server
+	wifi.println("AT+CIPMUX=1");
+	wifi.wait_for();
+
+	// turn on TCP service
+	wifi.print("AT+CIPSERVER=1,"); wifi.println(PORT);
+	wifi.wait_for();
 }
 
 void loop() {
@@ -260,7 +324,7 @@ void loop() {
 	// EXECUTE PID CONTROLLER CALCULATIONS
     holod.Execute();
 
-#ifdef OLED_DISPLAY	
+#ifdef DISPLAY_HOLOD
 	// DISPLAY INFO 
     display.clearDisplay(); display.setTextSize(1); display.setTextColor(WHITE);
     // Print current and target temperature values: t=-13.94C => -18.00C

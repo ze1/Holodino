@@ -5,8 +5,6 @@ VisualStudioVersion = 14.0.25123.0
 MinimumVisualStudioVersion = 10.0.40219.1
 Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "Holodino.Thermostat", "Holodino.Thermostat\Holodino.Thermostat.vcxproj", "{C5F80730-F44F-4478-BDAE-6634EFC2CA88}"
 EndProject
-Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "ssd1306_128x64_spi", "..\..\..\Documents\Arduino\libraries\Adafruit_SSD1306\examples\ssd1306_128x64_spi\ssd1306_128x64_spi.vcxproj", "{480FB4AC-C111-4AC5-A528-C0FFFD1C55B8}"
-EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|x64 = Debug|x64
@@ -21,14 +19,6 @@ Global
 		{C5F80730-F44F-4478-BDAE-6634EFC2CA88}.Release|x64.ActiveCfg = Release|Win32
 		{C5F80730-F44F-4478-BDAE-6634EFC2CA88}.Release|x86.ActiveCfg = Release|Win32
 		{C5F80730-F44F-4478-BDAE-6634EFC2CA88}.Release|x86.Build.0 = Release|Win32
-		{480FB4AC-C111-4AC5-A528-C0FFFD1C55B8}.Debug|x64.ActiveCfg = Debug|x64
-		{480FB4AC-C111-4AC5-A528-C0FFFD1C55B8}.Debug|x64.Build.0 = Debug|x64
-		{480FB4AC-C111-4AC5-A528-C0FFFD1C55B8}.Debug|x86.ActiveCfg = Debug|Win32
-		{480FB4AC-C111-4AC5-A528-C0FFFD1C55B8}.Debug|x86.Build.0 = Debug|Win32
-		{480FB4AC-C111-4AC5-A528-C0FFFD1C55B8}.Release|x64.ActiveCfg = Release|x64
-		{480FB4AC-C111-4AC5-A528-C0FFFD1C55B8}.Release|x64.Build.0 = Release|x64
-		{480FB4AC-C111-4AC5-A528-C0FFFD1C55B8}.Release|x86.ActiveCfg = Release|Win32
-		{480FB4AC-C111-4AC5-A528-C0FFFD1C55B8}.Release|x86.Build.0 = Release|Win32
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE
