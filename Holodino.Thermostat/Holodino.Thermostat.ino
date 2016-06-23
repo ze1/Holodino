@@ -1,6 +1,6 @@
 #include <Arduino.h>
 #include <PID_v1.h>
-#include <Sodaq_DS3231.h>
+//#include <Sodaq_DS3231.h>
 
 #define PRODUCT       "HOLODINO"
 
@@ -10,23 +10,35 @@
 #define INITIAL_PID_D       270
 
 #define START_DELAY         270
-#define WINDOW_SIZE        1200
+#define WINDOW_SIZE		   1200
 
-#define TEST_MODE
+//#define TEST_MODE
 #ifdef TEST_MODE
+
+	// TEST PARAMETERS
 	#define TIME_SPEED          1.0
 	#define TEMP_INITIAL      +20.0
 	#define TEMP_RATE_ON      -0.10
 	#define TEMP_RATE_OFF      0.01
+#else
+
+	// TEMPERATURE SENSOR 1-WIRE PIN
+	#define INPUT_PIN		      2
+
+	#include <OneWire.h>
+	#include <DallasTemperature.h>
+	
+	OneWire temperature_wire(INPUT_PIN); // Setup a oneWire instance to communicate with any OneWire devices (not just Maxim/Dallas temperature ICs)
+	DallasTemperature temperature(&temperature_wire); // Pass our oneWire reference to Dallas Temperature. 
 #endif
 
 // DISPLAY: INTERNAL INFO
 // ==================================
 
-#define OLED_DISPLAY
+//#define OLED_DISPLAY
 #ifdef OLED_DISPLAY
-	#define DISPLAY_ESP
-	//#define DISPLAY_HOLOD
+	//#define DISPLAY_ESP
+	#define DISPLAY_HOLOD
 	#include <Adafruit_GFX.h>
 	#include <Adafruit_SSD1306.h>
 	#define OLED_MOSI             9 // D1
@@ -42,7 +54,7 @@
 //  + Connect IN  to digital pin
 //  + Connect VCC to power 5V DC
 //  + Connect GND to common ground
-#define OUTPUT_PIN            2
+#define OUTPUT_PIN            4
 
 #define DEBUG_PIN             3 // PWM
 
@@ -91,7 +103,7 @@ public:
 	enum States { stInit, stStart, stOn, stOff };
 	Controller(double speed, sec duration, sec cooldown, int output_pin) :
         timer_(speed), history_timer_(speed), duration_(duration), cooldown_(cooldown), output_pin_(output_pin),
-        input_(-273), output_(), target_(TEMP_TARGET), pid_(&input_, &output_, &target_, INITIAL_PID_P, INITIAL_PID_I, INITIAL_PID_D, REVERSE),
+        input_(), output_(), target_(TEMP_TARGET), pid_(&input_, &output_, &target_, INITIAL_PID_P, INITIAL_PID_I, INITIAL_PID_D, REVERSE),
 		offset_(), state_(), history_() {
     }
     virtual bool Init() {
@@ -124,7 +136,7 @@ public:
 			case stStart: end = cooldown_ * 1000 - offset_; break;
 			default: end = 0;
 		}
-		return max((signed)(end - TimeElapsed()), 0);
+		return max((signed long)(end - TimeElapsed()), 0);
     }
     States Execute() {
         if (state_ == stInit && Init()) State(stStart);
@@ -167,7 +179,7 @@ private:
 };
 
 // ************** HOLODINO WIFI ************* //
-
+/*
 #define esp   Serial        // use Serial1 to talk to esp8266
 
 #define SSID  "HOLODINO"    // WiFi SSID
@@ -225,7 +237,7 @@ public:
 private:
 }
 wifi;
-
+*/
 // ***************** HOLODINO MAIN ***************** //
 
 #ifndef TEST_MODE
@@ -236,12 +248,12 @@ public:
         Controller(1.0, WINDOW_SIZE, START_DELAY, OUTPUT_PIN) {
     }
 	virtual bool Init() {
-		if (!Controller::Init() || !rtc.begin() || !rtc.convertTemperature()) return false;
+		if (!Controller::Init()) return false;
 		return true; 
 	}
-    virtual bool Input(double &temp) {
-        if (!rtc.convertTemperature()) return false;
-        temp = rtc.getTemperature();
+    virtual bool Input(double &t) {
+		temperature.requestTemperatures();
+        t = temperature.getTempCByIndex(0);
         return true;
     }
 }
@@ -272,6 +284,8 @@ holod;
 
 void setup() {
 
+	temperature.begin();
+
 #ifdef OLED_DISPLAY	
 	display.begin(SSD1306_SWITCHCAPVCC);
  // display.begin(SSD1306_EXTERNALVCC);
@@ -282,7 +296,7 @@ void setup() {
 	display.println(PRODUCT);
 	display.display();
 #endif
-
+	/*
 	// assume esp8266 operates at 115200 baud rate
 	esp.begin(115200);
 	// try empty AT command
@@ -316,7 +330,7 @@ void setup() {
 
 	// turn on TCP service
 	wifi.print("AT+CIPSERVER=1,"); wifi.println(PORT);
-	wifi.wait_for();
+	wifi.wait_for();*/
 }
 
 void loop() {
@@ -327,7 +341,7 @@ void loop() {
 #ifdef DISPLAY_HOLOD
 	// DISPLAY INFO 
     display.clearDisplay(); display.setTextSize(1); display.setTextColor(WHITE);
-    // Print current and target temperature values: t=-13.94C => -18.00C
+	// Print current and target temperature values: t=-13.94C => -18.00C
 	display.setCursor(0, 0); display.print("t="); if (holod.input() > 0) display.print("+"); display.print(holod.input()); display.print("C");
     display.print(holod.input() < holod.target() ? " <= " : " => "); if (holod.target() > 0) display.print("+"); display.print(holod.target()); display.print("C");
     // Print time left, current state and time elapsed: +23 << OFF << -742
@@ -336,7 +350,7 @@ void loop() {
     // Print calculated output value, duration in seconds of the ON state: == 920 sec ==
 	display.setCursor(0, 20); display.print("  == "); display.print(holod.output()); display.print(" sec ==");
     // Display historical data chart: temperature by minutes
-    int hist_min = holod.history().Min, hist_max = holod.history().Max;
+   /* int hist_min = holod.history().Min, hist_max = holod.history().Max;
 	int	hist_range = hist_max - hist_min + 1, hist_height = SSD1306_LCDHEIGHT / 2;
 	int	hist_top = 30;//SSD1306_LCDHEIGHT - hist_height + max(0, hist_height - hist_range + 1);
     float hist_scale = min((float)hist_height / hist_range, 1.0f);
@@ -345,8 +359,9 @@ void loop() {
     for (int x = SSD1306_LCDWIDTH - 1, i = holod.history().Index; x >= 0 && i >= 0; --x, --i) display.drawPixel(x, hist_top + hist_scale * (hist_max - holod.history().Data[i]), WHITE);
     int h = hist_bottom - hist_top; if (h <= 8) { hist_top -= 4 - h / 2; hist_bottom += 4 - (h - h / 2); }
     display.setCursor(0, hist_top - 3); display.print("hi:"); if (hist_max > 0) display.print("+"); display.print(hist_max);
-    display.setCursor(0, hist_bottom - 3); display.print("lo:"); if (hist_min > 0) display.print("+"); display.print(hist_min);
+    display.setCursor(0, hist_bottom - 3); display.print("lo:"); if (hist_min > 0) display.print("+"); display.print(hist_min);*/
     display.display();
 #endif
+
 }
 
