@@ -1,10 +1,12 @@
 #include <Arduino.h>
 #include <PID_v1.h>
+
 //#include <Sodaq_DS3231.h>
 
 #define PRODUCT       "HOLODINO"
 
-#define TEMP_TARGET       -12.0
+#define TEMP_TARGET         -12
+
 #define INITIAL_PID_P        30
 #define INITIAL_PID_I        60
 #define INITIAL_PID_D       270
@@ -14,20 +16,16 @@
 
 //#define TEST_MODE
 #ifdef TEST_MODE
-
 	// TEST PARAMETERS
 	#define TIME_SPEED          1.0
 	#define TEMP_INITIAL      +20.0
 	#define TEMP_RATE_ON      -0.10
 	#define TEMP_RATE_OFF      0.01
 #else
-
 	// TEMPERATURE SENSOR 1-WIRE PIN
 	#define INPUT_PIN		      2
-
 	#include <OneWire.h>
 	#include <DallasTemperature.h>
-	
 	OneWire temperature_wire(INPUT_PIN); // Setup a oneWire instance to communicate with any OneWire devices (not just Maxim/Dallas temperature ICs)
 	DallasTemperature temperature(&temperature_wire); // Pass our oneWire reference to Dallas Temperature. 
 #endif
@@ -37,8 +35,8 @@
 
 //#define OLED_DISPLAY
 #ifdef OLED_DISPLAY
-	//#define DISPLAY_ESP
-	#define DISPLAY_HOLOD
+	#define DISPLAY_WIFI
+	//#define DISPLAY_HOLOD
 	#include <Adafruit_GFX.h>
 	#include <Adafruit_SSD1306.h>
 	#define OLED_MOSI             9 // D1
@@ -47,16 +45,19 @@
 	#define OLED_CS              12 //  -
 	#define OLED_RESET           13 // RST
 	Adafruit_SSD1306 display(OLED_MOSI, OLED_CLK, OLED_DC, OLED_RESET, OLED_CS);
+	//Adafruit_SSD1306 display(13);
 #endif
 
 // OUTPUT: MOTOR RELAY SIGNAL PIN#
-// ==================================
+// ===================================
 //  + Connect IN  to digital pin
 //  + Connect VCC to power 5V DC
 //  + Connect GND to common ground
 #define OUTPUT_PIN            4
 
-#define DEBUG_PIN             3 // PWM
+// DEBUG: LED PWM PIN
+// ===================================
+#define DEBUG_PIN             3
 
 // ************** HOLODINO TIMER ************* //
 
@@ -73,6 +74,263 @@ private:
     msec offset_;
     double speed_;
 };
+
+// ************** HOLODINO WIFI ************* //
+//#define WIFI_CLIENT
+//#define WIFI_SERVER
+#if defined(WIFI_CLIENT) || defined(WIFI_SERVER)
+
+//#define WIFI_ACCESSPOINT
+#define WIFI_STATION
+
+#define esp   Serial        // use Serial1 to talk to esp8266
+
+#define SSID  "O"    // WiFi SSID
+#define PASS  "9164035980"  // WiFi password
+#define HOST  "10.1.1.10"   // HTTP host
+#define PORT  80          // HTTP port
+
+#define WIFI_RXRES_ENDSTR  1
+#define WIFI_RXRES_LENGTH  2
+#define WIFI_RXRES_BUFFER  4
+#define WIFI_RXRES_TIMEOUT 8
+
+class Wifi {
+public:
+
+	Wifi() :
+		rxbuf(), rxendstr(), rxendlen(), rxlen(), rxidx(), rxres(0xff), rxtim(), rxfun(), state_() {
+
+	}
+
+	template<typename T>void print(T c) {
+		esp.print(c);
+#ifdef DISPLAY_WIFI
+		display.print(c);
+#endif
+	}
+
+	template<typename T>void print(const T* c) {
+		esp.print(c);
+#ifdef DISPLAY_WIFI
+		display.print(c);
+#endif
+	}
+
+	template<typename T>void println(T c) {
+		esp.println(c);
+#ifdef DISPLAY_WIFI
+		display.print(c);
+		display.display();
+#endif
+	}
+
+	template<typename T>void println(const T* c) {
+		esp.println(c);
+#ifdef DISPLAY_WIFI
+		display.print(c);
+		display.display();
+#endif
+	}
+
+	typedef void (rxfunc(Wifi&, uint8_t, char*, uint16_t));
+
+	void wait_for_crlf(uint32_t timeout, rxfunc fun) {
+
+		wait_for("\r\n", 0, timeout, fun);
+	}
+
+	void wait_for(const char *end, uint16_t len, uint32_t timeout, rxfunc fun) {
+
+		rxres = 0;
+		rxidx = 0;
+		rxfun = fun;
+		rxtim = millis() + timeout;
+		rxlen = min(sizeof(rxbuf), len ? len : 0xffff);
+		rxendlen = end ? strlen(end) : 0;
+		if (rxendlen) strncpy(rxendstr, end, rxendlen);
+	}
+
+	void loop() {
+
+		if (!rxres && esp.available()) {
+
+			do {
+
+				char chr = esp.read();
+				rxbuf[rxidx++] = chr;
+
+#ifdef DISPLAY_WIFI
+				if (chr >= 0x20 && chr < 0x80) display.print(chr);
+#endif
+
+				rxres = 
+					(millis() < rxtim ? 0 : WIFI_RXRES_TIMEOUT) |
+					(rxidx < sizeof(rxbuf) ? 0 : WIFI_RXRES_BUFFER) |
+					(rxidx < rxlen ? 0 : WIFI_RXRES_LENGTH) |
+					(rxidx < rxendlen || memcmp(rxbuf + rxidx - rxendlen, rxendstr, rxendlen) ? 0 : WIFI_RXRES_ENDSTR);
+
+				if (rxres) {
+
+#ifdef DISPLAY_WIFI
+					display.print(" ="); 
+					display.print(rxres & WIFI_RXRES_ENDSTR ? "E" : ""); display.print(rxres & WIFI_RXRES_LENGTH ? "L" : "");
+					display.print(rxres & WIFI_RXRES_BUFFER ? "B" : ""); display.print(rxres & WIFI_RXRES_TIMEOUT ? "T" : ""); 
+					display.println("=");
+					display.display();
+					//display.clearDisplay();
+					//display.setCursor(0, 0);
+#endif
+
+					rxfun(*this, rxres, rxbuf, rxidx);
+					return;
+				}
+			}
+			while (esp.available());
+			display.display();
+		}
+	}
+
+	void setup() {
+
+		esp.begin(115200);
+	}
+
+	void init() {
+
+		state(1);
+		println("ATE1");
+		wait_for_crlf(5000, [](Wifi &wifi, uint8_t result, char *data, uint16_t size) {
+			if ((result & WIFI_RXRES_ENDSTR) && !strncmp(data, "OK", size - 4)) {
+
+				wifi.println("AT+CWMODE=1");
+				wifi.wait_for_crlf(5000, [](Wifi& wifi, uint8_t result, char *data, uint16_t size) {
+					if ((result & WIFI_RXRES_ENDSTR) && !strncmp(data, "OK", size - 4)) {
+
+						wifi.println("AT+RST");
+						wifi.wait_for_crlf(5000, [](Wifi& wifi, uint8_t result, char *data, uint16_t size) {
+							if ((result & WIFI_RXRES_ENDSTR) && !strncmp(data, "OK", size - 4)) {
+
+								wifi.print("AT+CWJAP=\""); wifi.print(SSID); wifi.print("\",\""); wifi.print(PASS); wifi.println("\""); // connect to an AP with SSID and password
+								wifi.wait_for_crlf(15000, [](Wifi& wifi, uint8_t result, char *data, uint16_t size) {
+
+									if ((result & WIFI_RXRES_ENDSTR) && !strncmp(data, "OK", size - 4))
+										wifi.state(8);
+									else
+										wifi.state(0);
+								});
+							}
+							else
+								wifi.state(0);
+						});
+					}
+					else
+						wifi.state(0);
+				});
+			}
+			else
+				wifi.state(0);
+		});
+		/*
+		#ifdef WIFI_STATION
+		wifi.println("AT+CWMODE=1"); // 1 = Station, 2 = AP, 3 = Both
+		#endif
+
+		#ifdef WIFI_ACCESSPOINT
+		wifi.println("AT+CWMODE=2"); // 1 = Station, 2 = AP, 3 = Both
+		#endif
+		wifi.wait_for_ok();
+		wifi.print("AT+RST\r\n"); // reset WiFi module
+		wifi.wait_for_ok(10000);
+
+		#ifdef WIFI_STATION
+		wifi.print("AT+CWJAP=\""); wifi.print(SSID); wifi.print("\",\""); wifi.print(PASS); wifi.println("\""); // connect to an AP with SSID and password
+		#endif
+
+		#ifdef WIFI_ACCESSPOINT
+		wifi.print("AT+CWSAP=\""); wifi.print(SSID); wifi.print("\",\""); wifi.print(PASS); wifi.println("\",10,4"); // set SSID, password and channel
+		#endif
+		wifi.wait_for_ok(10000);
+
+		#ifdef WIFI_SERVER
+		// print device IP address
+		wifi.println("AT+CIFSR");
+		wifi.wait_for();
+		// TCP server timeout
+		wifi.println("AT+CIPSTO=300");
+		wifi.wait_for();
+		// start server
+		wifi.println("AT+CIPMUX=1");
+		wifi.wait_for();
+		// turn on TCP service
+		wifi.print("AT+CIPSERVER=1,"); wifi.println(PORT);
+		wifi.wait_for();
+		#endif
+		*/
+	}
+
+	void connect(const char* host, uint16_t port = 80, bool tcp = true) {
+
+		state(9);
+		print("AT+CIPSTART=\""); print(tcp ? "TCP" : "UDP"); print("\",\""); print(host); print("\","); println(port);
+		wait_for_crlf(10000, [](Wifi &wifi, uint8_t result, char *data, uint16_t size) {
+			if ((result & WIFI_RXRES_ENDSTR) && (!strncmp(data, "OK", size - 4) || !strncmp(data, "ALREADY CONNECT", 17)))
+				wifi.state(16);
+			else
+				wifi.state(8);
+		});
+	}
+
+	void send() { // const char* txdata = "", uint16_t txsize = 0) {
+
+				  //uint16_t txsize = 0;
+				  //if (!txdata || !*txdata) return;
+				  //if (!txsize) txsize = strlen(txdata);
+
+		state(17);
+		print("AT+CIPSEND=33"); println("");//txsize);
+		wait_for(">", 1, 10000, [](Wifi &wifi, uint8_t result, char *data, uint16_t size) {
+			if (result & WIFI_RXRES_ENDSTR) {
+
+				wifi.print("GET / HTTP/1.0\r\nHost: ze1.org\r\n\r\n");
+				wifi.wait_for_crlf(10000, [](Wifi &wifi, uint8_t result, char *data, uint16_t size) {
+
+					if ((result & WIFI_RXRES_ENDSTR) && (!strncmp(data, "OK", size - 4) || !strncmp(data, "SEND OK", 9)))
+						wifi.state(32);
+					else
+						wifi.state(16);
+				});
+			}
+			else
+				wifi.state(17);
+		});
+	}
+
+	void state(uint8_t st) {
+
+		state_ = st;
+	}
+
+	uint8_t state() {
+
+		return state_;
+	}
+
+private:
+
+	char rxbuf[32];
+	char rxendstr[16];
+	uint16_t rxendlen;
+	uint16_t rxlen;
+	uint16_t rxidx;
+	uint8_t rxres;
+	uint32_t rxtim;
+	rxfunc *rxfun;
+	uint8_t state_;
+}
+wifi;
+
+#endif
 
 // ************** HOLODINO HISTORY ************* //
 
@@ -152,11 +410,30 @@ public:
 			history_timer_.Reset();
 			history_.Add(input_);
 		}
-		msec td = 1000 / timer_.speed(), te = TimeElapsed(), tt = (msec)(((float)te / (te + TimeLeft())) * td);
-		analogWrite(DEBUG_PIN, state_ == stStart ? 96 : (state_ == stOn ? 255 : 32)); delay(tt);
-		analogWrite(DEBUG_PIN, 0); delay(td - tt);
-        return state_;
+		//msec td = 1000 / timer_.speed(), te = TimeElapsed(), tt = (msec)(((float)te / (te + TimeLeft())) * td);
+		//analogWrite(DEBUG_PIN, state_ == stStart ? 96 : (state_ == stOn ? 255 : 32)); wifi.loop(tt);
+		//analogWrite(DEBUG_PIN, 0); wifi.loop(td - tt);
+		Idle((msec)((double)TimeElapsed() / (TimeElapsed() + TimeLeft()) * 999));
+		return state_;
     }
+	void Idle(msec elapsed) {
+
+		while (millis() < exec_ + 999 - elapsed) {
+			delay(10);
+#if defined(WIFI_CLIENT) || defined(WIFI_SERVER)
+			wifi.loop();
+#endif
+		}
+		analogWrite(DEBUG_PIN, state_ == stStart ? 64 : (state_ == stOn ? 255 : 128));
+		while (millis() < exec_ + 999) {
+			delay(10);
+#if defined(WIFI_CLIENT) || defined(WIFI_SERVER)
+			wifi.loop();
+#endif
+		}
+		analogWrite(DEBUG_PIN, 0);
+		exec_ = millis();
+	}
 	States state() { return state_; }
 	static const char* StateStr(States s) { return s == stInit ? "INIT" : s == stStart ? "DELAY" : s == stOn ? "*ON*" : s == stOff ? "OFF" : "ERROR"; }
 	double input() { return input_; }
@@ -173,71 +450,12 @@ private:
     double output_;
     double target_;
     PID pid_;
+	msec exec_;
 	msec offset_;
 	States state_;
 	History history_;
 };
 
-// ************** HOLODINO WIFI ************* //
-/*
-#define esp   Serial        // use Serial1 to talk to esp8266
-
-#define SSID  "HOLODINO"    // WiFi SSID
-#define PASS  "9164035980"  // WiFi password
-#define PORT  "80"          // HTTP port
-
-class Wifi {
-public:
-	Wifi() {
-
-	}
-	template<typename T>void print(T c) {
-		esp.print(c);
-		display.print(c);
-	}
-	template<typename T>void print(const T* c) {
-		esp.print(c);
-		display.print(c);
-	}
-	template<typename T>void println(T c) {
-		esp.println(c);
-		display.println(c);
-		display.display();
-	}
-	template<typename T>void println(const T* c) {
-		esp.println(c);
-		display.println(c);
-		display.display();
-	}
-	// wait for at most timeout milliseconds or if OK\r\n is found
-	byte wait_for(const char* response = "OK\r\n", unsigned long timeout = 3000) {
-		unsigned short index = 0, length = strlen(response);
-		char *buffer = new char(length);
-		timeout += millis();
-		bool result = false;
-		do {
-			delay(1);
-			while (!result && esp.available()) {
-				char c = esp.read();
-				buffer[index++ % length] = c;
-				result = index >= length;
-				for (unsigned long r = length, b = index; result && r > 0; )
-					result = buffer[--b % length] == response[--r];
-				display.print(c);
-			}
-			display.display();
-		}
-		while (!result && millis() < timeout);
-		delete buffer;
-		display.display();
-    display.clearDisplay();
-    display.setCursor(0, 0);
-		return result;
-	}
-private:
-}
-wifi;
-*/
 // ***************** HOLODINO MAIN ***************** //
 
 #ifndef TEST_MODE
@@ -284,11 +502,14 @@ holod;
 
 void setup() {
 
+#ifndef TEST_MODE
 	temperature.begin();
+#endif
 
 #ifdef OLED_DISPLAY	
-	display.begin(SSD1306_SWITCHCAPVCC);
- // display.begin(SSD1306_EXTERNALVCC);
+	//display.begin(SSD1306_SWITCHCAPVCC);
+	display.begin(SSD1306_SWITCHCAPVCC, 0x3D);
+	// display.begin(SSD1306_EXTERNALVCC);
 	display.clearDisplay();
 	display.setTextSize(1);
 	display.setCursor(0, 0);
@@ -296,41 +517,47 @@ void setup() {
 	display.println(PRODUCT);
 	display.display();
 #endif
-	/*
-	// assume esp8266 operates at 115200 baud rate
+
+#if defined(WIFI_CLIENT) || defined(WIFI_SERVER)
+	wifi.setup();/*
 	esp.begin(115200);
-	// try empty AT command
 	wifi.println("AT");
-	wifi.wait_for();
-	// set mode 2 (AP)
-	wifi.println("AT+CWMODE=2");
-	wifi.wait_for();
-	// reset WiFi module
-	wifi.print("AT+RST\r\n");
-	wifi.wait_for();
+	wifi.wait_for_ok();
+	#ifdef WIFI_STATION
+	wifi.println("AT+CWMODE=1"); // 1 = Station, 2 = AP, 3 = Both
+	#endif
+	#ifdef WIFI_ACCESSPOINT
+	wifi.println("AT+CWMODE=2"); // 1 = Station, 2 = AP, 3 = Both
+	#endif
+	wifi.wait_for_ok();
+	wifi.print("AT+RST\r\n"); // reset WiFi module
+	wifi.wait_for_ok();
 	delay(3000);
+	#ifdef WIFI_STATION
+	wifi.print("AT+CWJAP=\""); wifi.print(SSID); wifi.print("\",\""); wifi.print(PASS); wifi.println("\""); // connect to an AP with SSID and password
+	#endif
+	#ifdef WIFI_ACCESSPOINT
+	wifi.print("AT+CWSAP=\""); wifi.print(SSID); wifi.print("\",\""); wifi.print(PASS); wifi.println("\",10,4"); // set SSID, password and channel
+	#endif
+	wifi.wait_for_ok(10000);
+	*/
+#endif
 
-	// setup AP
-	wifi.print("AT+CWSAP=\""); wifi.print(SSID); wifi.print("\",\""); wifi.print(PASS); wifi.println("\",10,4");
-	// this may take a while, so wait for 5 seconds
-	wifi.wait_for();
-  delay(10000);
-
+#ifdef WIFI_SERVER
 	// print device IP address
 	wifi.println("AT+CIFSR");
 	wifi.wait_for();
-
 	// TCP server timeout
 	wifi.println("AT+CIPSTO=300");
 	wifi.wait_for();
-
 	// start server
 	wifi.println("AT+CIPMUX=1");
 	wifi.wait_for();
-
 	// turn on TCP service
 	wifi.print("AT+CIPSERVER=1,"); wifi.println(PORT);
-	wifi.wait_for();*/
+	wifi.wait_for();
+#endif
+
 }
 
 void loop() {
@@ -361,6 +588,16 @@ void loop() {
     display.setCursor(0, hist_top - 3); display.print("hi:"); if (hist_max > 0) display.print("+"); display.print(hist_max);
     display.setCursor(0, hist_bottom - 3); display.print("lo:"); if (hist_min > 0) display.print("+"); display.print(hist_min);*/
     display.display();
+#endif
+
+#ifdef WIFI_CLIENT
+
+	if (wifi.state() == 0) wifi.init();
+	if (wifi.state() == 8) wifi.connect(HOST, PORT);
+	if (wifi.state() == 64) wifi.send();
+	wifi.loop();
+	//wifi.println("AT+CIPSTATUS");
+	//wifi.wait_for_ok(100);
 #endif
 
 }
