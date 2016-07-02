@@ -1,3 +1,4 @@
+#include <SerialPort.h>
 #include <Arduino.h>
 #include <PID_v1.h>
 
@@ -5,6 +6,8 @@
 
 #define PRODUCT       "HOLODINO"
 
+//#define HOLOD
+#ifdef HOLOD
 #define TEMP_TARGET         -12
 
 #define INITIAL_PID_P        30
@@ -30,10 +33,23 @@
 	DallasTemperature temperature(&temperature_wire); // Pass our oneWire reference to Dallas Temperature. 
 #endif
 
+// OUTPUT: MOTOR RELAY SIGNAL PIN#
+// ===================================
+//  + Connect IN  to digital pin
+//  + Connect VCC to power 5V DC
+//  + Connect GND to common ground
+#define OUTPUT_PIN            4
+
+// DEBUG: LED PWM PIN
+// ===================================
+#define DEBUG_PIN             3
+
+#endif
+
 // DISPLAY: INTERNAL INFO
 // ==================================
 
-//#define OLED_DISPLAY
+#define OLED_DISPLAY
 #ifdef OLED_DISPLAY
 	#define DISPLAY_WIFI
 	//#define DISPLAY_HOLOD
@@ -47,17 +63,6 @@
 	Adafruit_SSD1306 display(OLED_MOSI, OLED_CLK, OLED_DC, OLED_RESET, OLED_CS);
 	//Adafruit_SSD1306 display(13);
 #endif
-
-// OUTPUT: MOTOR RELAY SIGNAL PIN#
-// ===================================
-//  + Connect IN  to digital pin
-//  + Connect VCC to power 5V DC
-//  + Connect GND to common ground
-#define OUTPUT_PIN            4
-
-// DEBUG: LED PWM PIN
-// ===================================
-#define DEBUG_PIN             3
 
 // ************** HOLODINO TIMER ************* //
 
@@ -76,30 +81,33 @@ private:
 };
 
 // ************** HOLODINO WIFI ************* //
-//#define WIFI_CLIENT
+#define WIFI_CLIENT
 //#define WIFI_SERVER
 #if defined(WIFI_CLIENT) || defined(WIFI_SERVER)
 
 //#define WIFI_ACCESSPOINT
 #define WIFI_STATION
 
-#define esp   Serial        // use Serial1 to talk to esp8266
+SerialPort<0, 63, 63> NewSerial;
+#define esp   NewSerial        // use Serial1 to talk to esp8266
 
 #define SSID  "O"    // WiFi SSID
 #define PASS  "9164035980"  // WiFi password
 #define HOST  "10.1.1.10"   // HTTP host
 #define PORT  80          // HTTP port
 
-#define WIFI_RXRES_ENDSTR  1
-#define WIFI_RXRES_LENGTH  2
-#define WIFI_RXRES_BUFFER  4
-#define WIFI_RXRES_TIMEOUT 8
+#define WIFI_RXRES_OK      1
+#define WIFI_RXRES_ERROR   2
+#define WIFI_RXRES_ENDSTR  4
+#define WIFI_RXRES_LENGTH  8
+#define WIFI_RXRES_BUFFER  16
+#define WIFI_RXRES_TIMEOUT 32
 
 class Wifi {
 public:
 
 	Wifi() :
-		rxbuf(), rxendstr(), rxendlen(), rxlen(), rxidx(), rxres(0xff), rxtim(), rxfun(), state_() {
+		rxbuf(), rxendstr(), rxendlen(), rxlen(), rxidx(), rxres(0xff), rxtim(), rxfun(), state_(), rxupd() {
 
 	}
 
@@ -107,6 +115,7 @@ public:
 		esp.print(c);
 #ifdef DISPLAY_WIFI
 		display.print(c);
+		display.display();
 #endif
 	}
 
@@ -114,6 +123,7 @@ public:
 		esp.print(c);
 #ifdef DISPLAY_WIFI
 		display.print(c);
+		display.display();
 #endif
 	}
 
@@ -121,6 +131,7 @@ public:
 		esp.println(c);
 #ifdef DISPLAY_WIFI
 		display.print(c);
+		display.print(">");
 		display.display();
 #endif
 	}
@@ -129,107 +140,162 @@ public:
 		esp.println(c);
 #ifdef DISPLAY_WIFI
 		display.print(c);
+		display.print(">");
 		display.display();
 #endif
 	}
 
-	typedef void (rxfunc(Wifi&, uint8_t, char*, uint16_t));
+	typedef void (rxfunc(Wifi&));
 
-	void wait_for_crlf(uint32_t timeout, rxfunc fun) {
-
-		wait_for("\r\n", 0, timeout, fun);
-	}
-
-	void wait_for(const char *end, uint16_t len, uint32_t timeout, rxfunc fun) {
+	void wait_for(const char *endstr, uint16_t len, uint32_t timeout, rxfunc fun) {
 
 		rxres = 0;
 		rxidx = 0;
 		rxfun = fun;
-		rxtim = millis() + timeout;
-		rxlen = min(sizeof(rxbuf), len ? len : 0xffff);
-		rxendlen = end ? strlen(end) : 0;
-		if (rxendlen) strncpy(rxendstr, end, rxendlen);
+		rxlen = len;
+		rxtim = timeout ? millis() + timeout : 0;
+		rxendlen = endstr ? strlen(endstr) : 0;
+		if (rxendlen) strncpy(rxendstr, endstr, rxendlen);
 	}
 
-	void loop() {
+	void loop(rxfunc fun) {
 
-		if (!rxres && esp.available()) {
+		if (state_ & 1) {
 
-			do {
+			if (!rxres) {
 
-				char chr = esp.read();
-				rxbuf[rxidx++] = chr;
+				do {
 
+					while (esp.available()) {
+
+						char chr = esp.read();
+						rxbuf[rxidx++] = esp.read();
+	#ifdef DISPLAY_WIFI
+//						display.print(chr >= 0x20 && chr < 0x80 ? chr : '.');
+//						display.display();
+	#endif
+					}
+
+					rxres = 
+						(rxtim && millis() >= rxtim ? WIFI_RXRES_TIMEOUT : 0) |
+						(rxlen && rxidx >= rxlen ? WIFI_RXRES_LENGTH : 0) |
+						(rxidx >= sizeof(rxbuf) ? WIFI_RXRES_BUFFER : 0);
+
+					if (rxendlen) {
+
+						rxresidx = 0;
+						for (char *str = rxendstr, *end = str + rxendlen, *sep; str < end; str = ++sep, ++rxresidx) {
+
+							sep = strchr(str, '|');
+							if (!sep) sep = end;
+							if (!memcmp(rxbuf + rxidx - (sep - str), str, sep - str)) {
+
+								rxres |= WIFI_RXRES_ENDSTR;
+								break;
+							}
+						}
+					}
 #ifdef DISPLAY_WIFI
-				if (chr >= 0x20 && chr < 0x80) display.print(chr);
-#endif
+					if (rxupd < millis()) {
 
-				rxres = 
-					(millis() < rxtim ? 0 : WIFI_RXRES_TIMEOUT) |
-					(rxidx < sizeof(rxbuf) ? 0 : WIFI_RXRES_BUFFER) |
-					(rxidx < rxlen ? 0 : WIFI_RXRES_LENGTH) |
-					(rxidx < rxendlen || memcmp(rxbuf + rxidx - rxendlen, rxendstr, rxendlen) ? 0 : WIFI_RXRES_ENDSTR);
+						rxupd = millis() + 1000;
+						uint8_t	x = display.getCursorY(), y = display.getCursorY();
+						display.setTextColor(0, 1);
+						display.setCursor(0, display.height() - 16);
+						display.print("m"); display.print(millis());
+						display.print("s"); display.print(state_);
+						display.print("r"); display.print(rxres);
+						display.print("i");	display.print(rxidx);
+						display.print("l"); display.print(rxlen);
+						display.print("t"); display.print(rxtim);
+						display.print("e"); display.print(rxendstr);
+						display.setTextColor(1, 0);
+						display.setCursor(0, 20);
+						rxbuf[rxidx] = 0x00;8888888888888888888888
+						display.print(rxbuf);
+						display.display();
+					}
+#endif
+				}
+				while (!rxres);// && esp.available());
 
 				if (rxres) {
 
-#ifdef DISPLAY_WIFI
-					display.print(" ="); 
-					display.print(rxres & WIFI_RXRES_ENDSTR ? "E" : ""); display.print(rxres & WIFI_RXRES_LENGTH ? "L" : "");
-					display.print(rxres & WIFI_RXRES_BUFFER ? "B" : ""); display.print(rxres & WIFI_RXRES_TIMEOUT ? "T" : ""); 
+	#ifdef DISPLAY_WIFI
+					display.print(" =");
+					display.print(rxres & WIFI_RXRES_TIMEOUT ? "T" : ""); 
+					display.print(rxres & WIFI_RXRES_BUFFER ? "B" : "");
+					display.print(rxres & WIFI_RXRES_LENGTH ? "L" : "");
+					if (rxres & WIFI_RXRES_ENDSTR) { display.print("E"); display.print(rxresidx); }
 					display.println("=");
 					display.display();
-					//display.clearDisplay();
-					//display.setCursor(0, 0);
-#endif
+	#endif
+					rxfun(*this);
+	#ifdef DISPLAY_WIFI
+					if (display.getCursorY() >= display.height() - 16) {
 
-					rxfun(*this, rxres, rxbuf, rxidx);
-					return;
+						display.clearDisplay();
+						display.setCursor(0, 0);
+					}
+	#endif
 				}
 			}
-			while (esp.available());
-			display.display();
 		}
+		if (state_ == 0) init();
+		if (state_ == 8) connect(HOST, PORT);
+		if (state_ == 64) send(fun);
+	}
+
+	bool rxresult(uint8_t resmask, uint8_t resindex = 0) const {
+
+		return (rxres & resmask) && (!(resmask & WIFI_RXRES_ENDSTR) || rxresidx == resindex);
 	}
 
 	void setup() {
 
-		esp.begin(115200);
+		esp.begin(9600);
 	}
 
 	void init() {
 
 		state(1);
-		println("ATE1");
-		wait_for_crlf(5000, [](Wifi &wifi, uint8_t result, char *data, uint16_t size) {
-			if ((result & WIFI_RXRES_ENDSTR) && !strncmp(data, "OK", size - 4)) {
+		wait_for("ready", 0, 5000, [](Wifi &wifi) {
 
-				wifi.println("AT+CWMODE=1");
-				wifi.wait_for_crlf(5000, [](Wifi& wifi, uint8_t result, char *data, uint16_t size) {
-					if ((result & WIFI_RXRES_ENDSTR) && !strncmp(data, "OK", size - 4)) {
+			wifi.println("AT");
+			wifi.wait_for("OK\r\n|ERROR\r\n", 0, 5000, [](Wifi &wifi) {
 
-						wifi.println("AT+RST");
-						wifi.wait_for_crlf(5000, [](Wifi& wifi, uint8_t result, char *data, uint16_t size) {
-							if ((result & WIFI_RXRES_ENDSTR) && !strncmp(data, "OK", size - 4)) {
+				if (wifi.rxresult(WIFI_RXRES_ENDSTR, 0)) {
 
-								wifi.print("AT+CWJAP=\""); wifi.print(SSID); wifi.print("\",\""); wifi.print(PASS); wifi.println("\""); // connect to an AP with SSID and password
-								wifi.wait_for_crlf(15000, [](Wifi& wifi, uint8_t result, char *data, uint16_t size) {
+					wifi.println("AT+CWMODE=1");
+					wifi.wait_for("OK\r\n|ERROR\r\n", 0, 5000, [](Wifi& wifi) {
 
-									if ((result & WIFI_RXRES_ENDSTR) && !strncmp(data, "OK", size - 4))
-										wifi.state(8);
-									else
-										wifi.state(0);
-								});
-							}
-							else
-								wifi.state(0);
-						});
-					}
-					else
-						wifi.state(0);
-				});
-			}
-			else
-				wifi.state(0);
+						if (wifi.rxresult(WIFI_RXRES_ENDSTR, 0)) {
+
+							wifi.println("AT+RST");
+							wifi.wait_for("ready", 0, 7000, [](Wifi& wifi) {
+
+								if (wifi.rxresult(WIFI_RXRES_TIMEOUT)) {
+
+									wifi.print("AT+CWJAP=\""); wifi.print(SSID); wifi.print("\",\""); wifi.print(PASS); wifi.println("\""); // connect to an AP with SSID and password
+									wifi.wait_for("OK\r\n|ERROR\r\n", 0, 10000, [](Wifi& wifi) {
+
+										if (wifi.rxresult(WIFI_RXRES_ENDSTR, 0))
+											wifi.state(8);
+										else
+											wifi.state(0);
+									});
+								}
+								else
+									wifi.state(0);
+							});
+						}
+						else
+							wifi.state(0);
+					});
+				}
+				else
+					wifi.state(0);
+			});
 		});
 		/*
 		#ifdef WIFI_STATION
@@ -273,41 +339,56 @@ public:
 
 		state(9);
 		print("AT+CIPSTART=\""); print(tcp ? "TCP" : "UDP"); print("\",\""); print(host); print("\","); println(port);
-		wait_for_crlf(10000, [](Wifi &wifi, uint8_t result, char *data, uint16_t size) {
-			if ((result & WIFI_RXRES_ENDSTR) && (!strncmp(data, "OK", size - 4) || !strncmp(data, "ALREADY CONNECT", 17)))
+		wait_for("OK\r\n|ALREADY CONNECT\r\n|ERROR\r\n", 0, 10000, [](Wifi &wifi) {
+			
+			if (wifi.rxresult(WIFI_RXRES_ENDSTR, 0) || wifi.rxresult(WIFI_RXRES_ENDSTR, 1))
 				wifi.state(16);
 			else
 				wifi.state(8);
 		});
 	}
 
-	void send() { // const char* txdata = "", uint16_t txsize = 0) {
+	void send(rxfunc fun) { // const char* txdata = "", uint16_t txsize = 0) {
 
-				  //uint16_t txsize = 0;
-				  //if (!txdata || !*txdata) return;
-				  //if (!txsize) txsize = strlen(txdata);
-
+		if (state_ != 16) return;
 		state(17);
-		print("AT+CIPSEND=33"); println("");//txsize);
-		wait_for(">", 1, 10000, [](Wifi &wifi, uint8_t result, char *data, uint16_t size) {
-			if (result & WIFI_RXRES_ENDSTR) {
 
-				wifi.print("GET / HTTP/1.0\r\nHost: ze1.org\r\n\r\n");
-				wifi.wait_for_crlf(10000, [](Wifi &wifi, uint8_t result, char *data, uint16_t size) {
+		fun(*this);
 
-					if ((result & WIFI_RXRES_ENDSTR) && (!strncmp(data, "OK", size - 4) || !strncmp(data, "SEND OK", 9)))
-						wifi.state(32);
-					else
-						wifi.state(16);
-				});
-			}
-			else
-				wifi.state(17);
-		});
+		uint16_t txlen = strlen(rxbuf);
+		if (txlen) {
+
+			print("AT+CIPSEND="); println(txlen);
+			wait_for(">", 0, 10000, [](Wifi &wifi) {
+				if (wifi.rxresult(WIFI_RXRES_ENDSTR)) {
+					
+					wifi.print(wifi.buffer());
+					wifi.wait_for("OK\r\n|SEND_OK\r\n|ERROR\r\n", 0, 10000, [](Wifi &wifi) {
+						
+						if (wifi.rxresult(WIFI_RXRES_ENDSTR, 0) || wifi.rxresult(WIFI_RXRES_ENDSTR, 1))
+							wifi.state(32);
+						else
+							wifi.state(16);
+					});
+				}
+				else
+					wifi.state(16);
+			});
+		}
+		else
+			state(16);
 	}
 
 	void state(uint8_t st) {
 
+#ifdef DISPLAY_WIFI
+		display.print("[");
+		display.print(state_);
+		display.print(">");
+		display.print(st);
+		display.print("]");
+		display.display();
+#endif
 		state_ = st;
 	}
 
@@ -316,24 +397,38 @@ public:
 		return state_;
 	}
 
+	void send(const char *data, uint16_t size = 0) {
+
+		size = min(!size ? strnlen(data, sizeof(rxbuf)) : size, sizeof(rxbuf) - 1);
+		if (size) strncpy(rxbuf, data, size);
+		rxbuf[size] = 0x00;
+	}
+
+	const char *buffer() {
+
+		return rxbuf;
+	}
+
 private:
 
-	char rxbuf[32];
-	char rxendstr[16];
+	char rxbuf[64];
+	char rxendstr[32];
 	uint16_t rxendlen;
 	uint16_t rxlen;
 	uint16_t rxidx;
 	uint8_t rxres;
+	uint8_t rxresidx;
 	uint32_t rxtim;
 	rxfunc *rxfun;
 	uint8_t state_;
+	uint32_t rxupd;
 }
 wifi;
 
 #endif
 
 // ************** HOLODINO HISTORY ************* //
-
+/*
 struct History {
     unsigned char Index;
     signed char Data[128];
@@ -353,6 +448,9 @@ struct History {
         Data[Index++] = value;
     }
 };
+*/
+
+#ifdef HOLOD
 
 // **************** HOLODINO CONTROLLER ***************** //
 
@@ -360,9 +458,11 @@ class Controller {
 public:
 	enum States { stInit, stStart, stOn, stOff };
 	Controller(double speed, sec duration, sec cooldown, int output_pin) :
-        timer_(speed), history_timer_(speed), duration_(duration), cooldown_(cooldown), output_pin_(output_pin),
+        timer_(speed), duration_(duration), cooldown_(cooldown), output_pin_(output_pin),
         input_(), output_(), target_(TEMP_TARGET), pid_(&input_, &output_, &target_, INITIAL_PID_P, INITIAL_PID_I, INITIAL_PID_D, REVERSE),
-		offset_(), state_(), history_() {
+		offset_(), state_()
+		//, history_(), history_timer_(speed)
+	{
     }
     virtual bool Init() {
         pid_.SetSampleTime(1000 / timer_.speed());
@@ -406,10 +506,10 @@ public:
             }
         }
         Output(state_ == stOn);
-		if (!history_.Index || history_timer_.MilliSeconds() >= 60000) {
+		/*if (!history_.Index || history_timer_.MilliSeconds() >= 60000) {
 			history_timer_.Reset();
 			history_.Add(input_);
-		}
+		}*/
 		//msec td = 1000 / timer_.speed(), te = TimeElapsed(), tt = (msec)(((float)te / (te + TimeLeft())) * td);
 		//analogWrite(DEBUG_PIN, state_ == stStart ? 96 : (state_ == stOn ? 255 : 32)); wifi.loop(tt);
 		//analogWrite(DEBUG_PIN, 0); wifi.loop(td - tt);
@@ -421,28 +521,34 @@ public:
 		while (millis() < exec_ + 999 - elapsed) {
 			delay(10);
 #if defined(WIFI_CLIENT) || defined(WIFI_SERVER)
-			wifi.loop();
+			wifi_loop(&wifi);
 #endif
 		}
 		analogWrite(DEBUG_PIN, state_ == stStart ? 64 : (state_ == stOn ? 255 : 128));
 		while (millis() < exec_ + 999) {
 			delay(10);
 #if defined(WIFI_CLIENT) || defined(WIFI_SERVER)
-			wifi.loop();
+			wifi_loop(&wifi);
 #endif
 		}
 		analogWrite(DEBUG_PIN, 0);
 		exec_ = millis();
+	}
+	void wifi_loop(Wifi *wifi) {
+
+		wifi->loop([](Wifi &wifi, uint8_t result, uint8_t index, char *data, uint16_t size) {
+
+			strcpy(data, "GET / HTTP/1.0\r\nHost: ze1.org\r\n\r\n");
+		});
 	}
 	States state() { return state_; }
 	static const char* StateStr(States s) { return s == stInit ? "INIT" : s == stStart ? "DELAY" : s == stOn ? "*ON*" : s == stOff ? "OFF" : "ERROR"; }
 	double input() { return input_; }
 	double output() { return output_; }
 	double target() { return target_; }
-	const History& history() { return history_; }
+	//const History& history() { return history_; }
 private:
     Timer timer_;
-	Timer history_timer_;
 	sec duration_;
     sec cooldown_;
 	int output_pin_;
@@ -453,7 +559,8 @@ private:
 	msec exec_;
 	msec offset_;
 	States state_;
-	History history_;
+	//History history_;
+	//Timer history_timer_;
 };
 
 // ***************** HOLODINO MAIN ***************** //
@@ -500,10 +607,14 @@ holod;
 
 #endif // TEST_MODE
 
+#endif // HOLOD
+
 void setup() {
 
+#ifdef HOLOD
 #ifndef TEST_MODE
 	temperature.begin();
+#endif
 #endif
 
 #ifdef OLED_DISPLAY	
@@ -562,8 +673,10 @@ void setup() {
 
 void loop() {
 
+#ifdef HOLOD
 	// EXECUTE PID CONTROLLER CALCULATIONS
-    holod.Execute();
+    //holod.Execute();
+#endif
 
 #ifdef DISPLAY_HOLOD
 	// DISPLAY INFO 
@@ -592,10 +705,11 @@ void loop() {
 
 #ifdef WIFI_CLIENT
 
-	if (wifi.state() == 0) wifi.init();
-	if (wifi.state() == 8) wifi.connect(HOST, PORT);
-	if (wifi.state() == 64) wifi.send();
-	wifi.loop();
+	wifi.loop([](Wifi &wifi) {
+
+		wifi.send("GET / HTTP/1.0\r\nHost: ze1.org\r\n\r\n");
+	});
+
 	//wifi.println("AT+CIPSTATUS");
 	//wifi.wait_for_ok(100);
 #endif
