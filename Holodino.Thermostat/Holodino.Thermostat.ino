@@ -12,6 +12,150 @@
 #define START_DELAY         270
 #define WINDOW_SIZE		   1200
 
+typedef   signed long  sec;
+typedef unsigned long msec;
+
+// DISPLAY: INTERNAL INFO
+// ==================================
+
+#define OLED_DISPLAY
+#ifdef OLED_DISPLAY
+#define DISPLAY_ESP
+//#define DISPLAY_HOLOD
+#include <Adafruit_GFX.h>
+#include <Adafruit_SSD1306.h>
+#define OLED_MOSI             9 // D1
+#define OLED_CLK             10 // D0
+#define OLED_DC              11 // DC
+#define OLED_CS              12 //  -
+#define OLED_RESET           13 // RST
+Adafruit_SSD1306 display(OLED_MOSI, OLED_CLK, OLED_DC, OLED_RESET, OLED_CS);
+#endif
+
+#define WIFI_CLIENT
+//#define WIFI_SERVER
+#if defined(WIFI_CLIENT) || defined(WIFI_SERVER)
+
+#define WIFI_STATION
+//#define WIFI_ACCESSPOINT
+
+// ************** HOLODINO WIFI ************* //
+
+#define esp   Serial        // use Serial1 to talk to esp8266
+
+#define SSID  "O"           // WiFi SSID
+#define PASS  "9164035980"  // WiFi password
+#define PORT  "80"          // HTTP port
+
+class Wifi {
+public:
+	Wifi() {
+
+	}
+	template<typename T>void print(T c) {
+		esp.print(c);
+		display.print(c);
+	}
+	template<typename T>void print(const T* c) {
+		esp.print(c);
+		display.print(c);
+	}
+	template<typename T>void println(T c) {
+		esp.println(c);
+		display.println(c);
+		display.display();
+	}
+	template<typename T>void println(const T* c) {
+		esp.println(c);
+		display.println(c);
+		display.display();
+	}
+	// wait for at most timeout milliseconds or if OK\r\n is found
+	byte wait_for(const char* response = "OK\r\n", unsigned long timeout = 3000) {
+		unsigned short index = 0, length = strlen(response);
+		char *buffer = new char(length);
+		timeout += millis();
+		bool result = false;
+		do {
+			delay(1);
+			if (esp.available()) {
+				do {
+					char c = esp.read();
+					buffer[index++ % length] = c;
+					result = index >= length;
+					for (unsigned long r = length, b = index; result && r > 0; )
+						result = buffer[--b % length] == response[--r];
+					if (c < 0x20) display.print(c, HEX); else display.print(&c);
+				}
+				while (!result && esp.available());
+			}
+		}
+		while (!result && millis() < timeout);
+		delete buffer;
+		display.println(result ? "=" : "-");
+		display.display();
+		if (display.getCursorY() > display.height()) {
+			display.clearDisplay();
+			display.setCursor(0, 0);
+		}
+		return result;
+	}
+	bool Init() {
+
+		// assume esp8266 operates at 115200 baud rate
+		esp.begin(9600);
+
+		// try empty AT command
+		println("AT");
+		wait_for();
+
+#ifdef WIFI_STATION
+		println("AT+CWMODE=1");
+#endif
+#ifdef WIFI_ACCESSPOINT
+		println("AT+CWMODE=2");
+#endif
+		wait_for();
+
+		// reset WiFi module
+		print("AT+RST\r\n");
+		wait_for();
+		wait_for("ready\r\n", 5000);
+
+#ifdef WIFI_STATION
+		print("AT+CWJAP=\""); print(SSID); print("\",\""); print(PASS); println("\""); // connect to an AP with SSID and password
+#endif
+#ifdef WIFI_ACCESSPOINT
+		print("AT+CWSAP=\""); print(SSID); print("\",\""); print(PASS); println("\",10,4"); // set SSID, password and channel
+#endif
+		wait_for("OK\r\n", 10000);
+
+		// print device IP address
+		println("AT+CIFSR");
+		wait_for();
+
+		// TCP server timeout
+		//wifi.println("AT+CIPSTO=300");
+		//wifi.wait_for();
+
+		// start server
+		//wifi.println("AT+CIPMUX=1");
+		//wifi.wait_for();
+
+		// turn on TCP service
+		//wifi.print("AT+CIPSERVER=1,"); wifi.println(PORT);
+		//wifi.wait_for();
+	}
+	void Loop(msec until) {
+
+		delay(min(max(1, until - millis()), 1000));
+	}
+private:
+}
+wifi;
+
+#endif
+
 //#define TEST_MODE
 #ifdef TEST_MODE
 
@@ -32,23 +176,6 @@
 	DallasTemperature temperature(&temperature_wire); // Pass our oneWire reference to Dallas Temperature. 
 #endif
 
-// DISPLAY: INTERNAL INFO
-// ==================================
-
-//#define OLED_DISPLAY
-#ifdef OLED_DISPLAY
-	//#define DISPLAY_ESP
-	#define DISPLAY_HOLOD
-	#include <Adafruit_GFX.h>
-	#include <Adafruit_SSD1306.h>
-	#define OLED_MOSI             9 // D1
-	#define OLED_CLK             10 // D0
-	#define OLED_DC              11 // DC
-	#define OLED_CS              12 //  -
-	#define OLED_RESET           13 // RST
-	Adafruit_SSD1306 display(OLED_MOSI, OLED_CLK, OLED_DC, OLED_RESET, OLED_CS);
-#endif
-
 // OUTPUT: MOTOR RELAY SIGNAL PIN#
 // ==================================
 //  + Connect IN  to digital pin
@@ -59,9 +186,6 @@
 #define DEBUG_PIN             3 // PWM
 
 // ************** HOLODINO TIMER ************* //
-
-typedef   signed long  sec;
-typedef unsigned long msec;
 
 class Timer {
 public:
@@ -74,8 +198,10 @@ private:
     double speed_;
 };
 
-// ************** HOLODINO HISTORY ************* //
+//#define HOLODINO_HISTORY
+#ifdef HOLODINO_HISTORY
 
+// ************** HOLODINO HISTORY ************* //
 struct History {
     unsigned char Index;
     signed char Data[128];
@@ -96,18 +222,30 @@ struct History {
     }
 };
 
+#endif
+
+#define HOLODINO_CONTROLLER
+#ifdef HOLODINO_CONTROLLER
+
 // **************** HOLODINO CONTROLLER ***************** //
 
 class Controller {
 public:
 	enum States { stInit, stStart, stOn, stOff };
 	Controller(double speed, sec duration, sec cooldown, int output_pin) :
-        timer_(speed), history_timer_(speed), duration_(duration), cooldown_(cooldown), output_pin_(output_pin),
+        timer_(speed), duration_(duration), cooldown_(cooldown), output_pin_(output_pin),
         input_(), output_(), target_(TEMP_TARGET), pid_(&input_, &output_, &target_, INITIAL_PID_P, INITIAL_PID_I, INITIAL_PID_D, REVERSE),
-		offset_(), state_(), history_() {
+		offset_(), state_(), exec_()
+#ifdef HOLODINO_HISTORY
+		, history_(), history_timer_(speed)
+#endif
+	{
     }
     virtual bool Init() {
-        pid_.SetSampleTime(1000 / timer_.speed());
+#if defined(WIFI_CLIENT) || defined(WIFI_SERVER)
+		wifi.Init();
+#endif
+		pid_.SetSampleTime(1000 / timer_.speed());
         pid_.SetOutputLimits(30, max(duration_ - cooldown_, 30));
         pid_.SetMode(AUTOMATIC);
         pinMode(output_pin_, OUTPUT);
@@ -148,24 +286,41 @@ public:
             }
         }
         Output(state_ == stOn);
+#ifdef HOLODINO_HISTORY
 		if (!history_.Index || history_timer_.MilliSeconds() >= 60000) {
 			history_timer_.Reset();
 			history_.Add(input_);
 		}
-		msec td = 1000 / timer_.speed(), te = TimeElapsed(), tt = (msec)(((float)te / (te + TimeLeft())) * td);
-		analogWrite(DEBUG_PIN, state_ == stStart ? 96 : (state_ == stOn ? 255 : 32)); delay(tt);
-		analogWrite(DEBUG_PIN, 0); delay(td - tt);
+#endif
+		Idle((msec)((double)TimeElapsed() / (TimeElapsed() + TimeLeft()) * 1000));
+		//msec td = 1000 / timer_.speed(), te = TimeElapsed(), tt = (msec)(((float)te / (te + TimeLeft())) * td);
+		//analogWrite(DEBUG_PIN, state_ == stStart ? 96 : (state_ == stOn ? 255 : 32)); delay(tt);
+		//analogWrite(DEBUG_PIN, 0); delay(td - tt);
         return state_;
     }
+	void Idle(msec elapsed) {
+		if (exec_) {
+			IdleLoop(exec_ + 1000 - elapsed);
+			analogWrite(DEBUG_PIN, state_ == stStart ? 64 : (state_ == stOn ? 255 : 128));
+			IdleLoop(exec_ + 1000);
+			analogWrite(DEBUG_PIN, 0);
+		}
+		exec_ = millis();
+	}
+	void IdleLoop(msec until) {
+#if defined(WIFI_CLIENT) || defined(WIFI_SERVER)
+		wifi.Loop(until);
+#else
+		delay(min(max(1, until - millis()), 1000));
+#endif
+	}
 	States state() { return state_; }
 	static const char* StateStr(States s) { return s == stInit ? "INIT" : s == stStart ? "DELAY" : s == stOn ? "*ON*" : s == stOff ? "OFF" : "ERROR"; }
 	double input() { return input_; }
 	double output() { return output_; }
 	double target() { return target_; }
-	const History& history() { return history_; }
 private:
     Timer timer_;
-	Timer history_timer_;
 	sec duration_;
     sec cooldown_;
 	int output_pin_;
@@ -175,69 +330,16 @@ private:
     PID pid_;
 	msec offset_;
 	States state_;
+	msec exec_;
+#ifdef HOLODINO_HISTORY
 	History history_;
+	Timer history_timer_;
+	public const History& history() { return history_; }
+#endif // HOLODINO_HISTORY
 };
 
-// ************** HOLODINO WIFI ************* //
-/*
-#define esp   Serial        // use Serial1 to talk to esp8266
+#endif
 
-#define SSID  "HOLODINO"    // WiFi SSID
-#define PASS  "9164035980"  // WiFi password
-#define PORT  "80"          // HTTP port
-
-class Wifi {
-public:
-	Wifi() {
-
-	}
-	template<typename T>void print(T c) {
-		esp.print(c);
-		display.print(c);
-	}
-	template<typename T>void print(const T* c) {
-		esp.print(c);
-		display.print(c);
-	}
-	template<typename T>void println(T c) {
-		esp.println(c);
-		display.println(c);
-		display.display();
-	}
-	template<typename T>void println(const T* c) {
-		esp.println(c);
-		display.println(c);
-		display.display();
-	}
-	// wait for at most timeout milliseconds or if OK\r\n is found
-	byte wait_for(const char* response = "OK\r\n", unsigned long timeout = 3000) {
-		unsigned short index = 0, length = strlen(response);
-		char *buffer = new char(length);
-		timeout += millis();
-		bool result = false;
-		do {
-			delay(1);
-			while (!result && esp.available()) {
-				char c = esp.read();
-				buffer[index++ % length] = c;
-				result = index >= length;
-				for (unsigned long r = length, b = index; result && r > 0; )
-					result = buffer[--b % length] == response[--r];
-				display.print(c);
-			}
-			display.display();
-		}
-		while (!result && millis() < timeout);
-		delete buffer;
-		display.display();
-    display.clearDisplay();
-    display.setCursor(0, 0);
-		return result;
-	}
-private:
-}
-wifi;
-*/
 // ***************** HOLODINO MAIN ***************** //
 
 #ifndef TEST_MODE
