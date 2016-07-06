@@ -1,4 +1,3 @@
-#include <SerialPort.h>
 #include <Arduino.h>
 #include <PID_v1.h>
 
@@ -88,13 +87,15 @@ private:
 //#define WIFI_ACCESSPOINT
 #define WIFI_STATION
 
-SerialPort<0, 63, 63> NewSerial;
-#define esp   NewSerial        // use Serial1 to talk to esp8266
+//#include <SerialPort.h>
+//SerialPort<0, 63, 63> NewSerial;
+#define esp   Serial        // use Serial1 to talk to esp8266
 
-#define SSID  "O"    // WiFi SSID
+#define BAUD  9600          // WiFi module connection baudrate
+#define SSID  "O"           // WiFi SSID
 #define PASS  "9164035980"  // WiFi password
 #define HOST  "10.1.1.10"   // HTTP host
-#define PORT  80          // HTTP port
+#define PORT  80            // HTTP port
 
 #define WIFI_RXRES_OK      1
 #define WIFI_RXRES_ERROR   2
@@ -114,34 +115,34 @@ public:
 	template<typename T>void print(T c) {
 		esp.print(c);
 #ifdef DISPLAY_WIFI
-		display.print(c);
-		display.display();
+//		display.print(c);
+//		display.display();
 #endif
 	}
 
 	template<typename T>void print(const T* c) {
 		esp.print(c);
 #ifdef DISPLAY_WIFI
-		display.print(c);
-		display.display();
+//		display.print(c);
+//		display.display();
 #endif
 	}
 
 	template<typename T>void println(T c) {
 		esp.println(c);
 #ifdef DISPLAY_WIFI
-		display.print(c);
-		display.print(">");
-		display.display();
+		//display.print(c);
+		//display.print(">");
+		//display.display();
 #endif
 	}
 
 	template<typename T>void println(const T* c) {
 		esp.println(c);
 #ifdef DISPLAY_WIFI
-		display.print(c);
-		display.print(">");
-		display.display();
+		//display.print(c);
+		//display.print(">");
+		//display.display();
 #endif
 	}
 
@@ -166,54 +167,57 @@ public:
 
 				do {
 
-					while (esp.available()) {
+					if (esp.available()) {
 
 						char chr = esp.read();
 						rxbuf[rxidx++] = esp.read();
-	#ifdef DISPLAY_WIFI
-//						display.print(chr >= 0x20 && chr < 0x80 ? chr : '.');
-//						display.display();
-	#endif
+#ifdef DISPLAY_WIFI
+						//if (chr < 0x20) { if (chr < 0x10) display.print("0"); display.print(chr, HEX); } else display.print(chr);
+						//display.display();
+#endif
+
+						if (rxendlen) {
+
+							rxresidx = 0;
+							for (char *str = rxendstr, *end = str + rxendlen, *sep; str < end; str = sep + 1, ++rxresidx) {
+
+								sep = strchr(str, '|');
+								if (!sep) sep = end;
+								if (!memcmp(rxbuf + rxidx - (sep - str), str, sep - str)) {
+
+									rxres |= WIFI_RXRES_ENDSTR;
+									break;
+								}
+							}
+						}
 					}
 
-					rxres = 
+					rxres |=
 						(rxtim && millis() >= rxtim ? WIFI_RXRES_TIMEOUT : 0) |
 						(rxlen && rxidx >= rxlen ? WIFI_RXRES_LENGTH : 0) |
 						(rxidx >= sizeof(rxbuf) ? WIFI_RXRES_BUFFER : 0);
 
-					if (rxendlen) {
-
-						rxresidx = 0;
-						for (char *str = rxendstr, *end = str + rxendlen, *sep; str < end; str = ++sep, ++rxresidx) {
-
-							sep = strchr(str, '|');
-							if (!sep) sep = end;
-							if (!memcmp(rxbuf + rxidx - (sep - str), str, sep - str)) {
-
-								rxres |= WIFI_RXRES_ENDSTR;
-								break;
-							}
-						}
-					}
 #ifdef DISPLAY_WIFI
-					if (rxupd < millis()) {
+					if (rxres || rxupd < millis()) {
 
-						rxupd = millis() + 1000;
 						uint8_t	x = display.getCursorY(), y = display.getCursorY();
-						display.setTextColor(0, 1);
 						display.setCursor(0, display.height() - 16);
-						display.print("m"); display.print(millis());
-						display.print("s"); display.print(state_);
-						display.print("r"); display.print(rxres);
-						display.print("i");	display.print(rxidx);
-						display.print("l"); display.print(rxlen);
-						display.print("t"); display.print(rxtim);
-						display.print("e"); display.print(rxendstr);
+						display.setTextColor(0, 1);
+						display.print(" m"); display.print(millis());
+						display.print(" s"); display.print(state_);
+						display.print(" r"); display.print(rxres);
+						display.print(" i"); display.print(rxidx);
+						display.print(" l"); display.print(rxlen);
+						display.print(" t"); display.print(rxtim);
+						display.print(" e"); display.print(rxendstr);
+
+						rxbuf[rxidx] = 0x00;
+						display.setCursor(0, 0);
 						display.setTextColor(1, 0);
-						display.setCursor(0, 20);
-						rxbuf[rxidx] = 0x00;8888888888888888888888
 						display.print(rxbuf);
 						display.display();
+
+						rxupd = millis() + 1000;
 					}
 #endif
 				}
@@ -253,7 +257,7 @@ public:
 
 	void setup() {
 
-		esp.begin(9600);
+		esp.begin(BAUD);
 	}
 
 	void init() {
