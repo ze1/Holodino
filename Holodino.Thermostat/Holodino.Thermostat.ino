@@ -6,11 +6,11 @@
 
 #define PRODUCT       "HOLODINO"
 
-#define TEMP_TARGET         -12
+#define TEMP_TARGET        -16
 
-#define INITIAL_PID_P       200
-#define INITIAL_PID_I         0
-#define INITIAL_PID_D         0
+#define INITIAL_PID_P       30
+#define INITIAL_PID_I       60 
+#define INITIAL_PID_D       15
 
 #define START_DELAY         270
 #define WINDOW_SIZE		   1200
@@ -21,10 +21,10 @@ typedef unsigned long     msec;
 #define TEST_MODE
 #ifdef TEST_MODE
 	// TEST PARAMETERS
-	#define TIME_SPEED     1.00
+	#define TIME_SPEED     10.00
 	#define TEMP_INITIAL +20.00
-	#define TEMP_RATE_ON  -0.10
-	#define TEMP_RATE_OFF  0.01
+	#define TEMP_RATE_ON  -0.020
+	#define TEMP_RATE_OFF  0.010
 #else
 	// TEMPERATURE SENSOR 1-WIRE PIN
 	#define INPUT_PIN		  2
@@ -164,25 +164,24 @@ public:
 					outp_ = output_;
 					serialize_ = true;
 				}
-				if (!TimeLeft()) {
-
-					State(state_ == stStart ? stOn
-						: (state_ == stOn ? stOff
-							: (state_ == stOff ? stStart
-								: stInit)));
-				}
+				if (!TimeLeft())
+					State(state_ == stStart ? stOn : (state_ == stOn ? stOff : (state_ == stOff ? stStart : stInit)));
 			}
         }
 		Output(state_ == stOn);
-		if (!history_.Index || history_timer_.MilliSeconds() >= 60000) {
+		
+		if (!history_.Index || 
+			history_timer_.MilliSeconds() >= 60000) {
 
 			history_timer_.Reset();
 			history_.Add(input_);
 			serialize_ = true;
 		}
 		Idle();
+
 		return state_;
 	}
+
 	void Idle() {
 
 		if (serialize_) {
@@ -207,13 +206,21 @@ public:
 
 		exec_ = millis();
     }
+
+	static const char* StateStr(States s) {
+
+		return s == stInit ? "INIT" : s == stStart ? "DELAY" : s == stOn ? "*ON*" : s == stOff ? "OFF" : "ERROR";
+	}
 	States state() { return state_; }
-	static const char* StateStr(States s) { return s == stInit ? "INIT" : s == stStart ? "DELAY" : s == stOn ? "*ON*" : s == stOff ? "OFF" : "ERROR"; }
+
 	double input() { return input_; }
 	double output() { return output_; }
 	double target() { return target_; }
+
 	const History& history() { return history_; }
+
 	void Serialize() {
+
 		N();
 		S("holod:{");
 		S("\"state\":"); S(state_);
@@ -230,12 +237,14 @@ public:
 		S(",\"cooldown\":"); S(cooldown_);
 		S(",\"history\":[");
 		for (uint16_t i = 0; i < history_.Index; ++i) {
+
 			if (i) S(",");
 			S(history_.Data[i]);
 		}
 		S("]}");
 		N();
 	}
+
 private:
     Timer timer_;
 	Timer history_timer_;
