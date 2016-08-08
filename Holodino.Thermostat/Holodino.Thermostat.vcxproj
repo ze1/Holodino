@@ -47,7 +47,7 @@
       <WarningLevel>Level3</WarningLevel>
       <Optimization>Disabled</Optimization>
       <SDLCheck>true</SDLCheck>
-      <AdditionalIncludeDirectories>C:\Users\alder_000\Documents\Arduino\libraries\PID;C:\Users\alder_000\Documents\Arduino\libraries\Sodaq_DS3231\src;D:\Arduino\hardware\arduino\avr\libraries\Wire\src;C:\Users\alder_000\Documents\Arduino\libraries\PID\utility;C:\Users\alder_000\Documents\Arduino\libraries\Sodaq_DS3231\src\utility;D:\Arduino\hardware\arduino\avr\libraries\Wire\src\utility;D:\Arduino\libraries;D:\Arduino\hardware\arduino\avr\libraries;C:\Users\alder_000\Documents\Arduino\libraries;D:\Arduino\hardware\arduino\avr\cores\arduino;D:\Arduino\hardware\arduino\avr\variants\standard;C:\Users\alder_000\Source\Repos\Holodino\Holodino.Thermostat;D:\Arduino\hardware\arduino\avr\cores\arduino;D:\Arduino\hardware\arduino\avr\variants\standard;C:\Users\alder_000\Documents\Arduino\libraries\PID;C:\Users\alder_000\Documents\Arduino\libraries\Sodaq_DS3231\src;D:\Arduino\hardware\arduino\avr\libraries\Wire\src;D:\Arduino\libraries;D:\Arduino\hardware\arduino\avr\libraries;G:\VS2015\Common7\IDE\Extensions\rbseqz3p.00g\Micro Platforms\default\debuggers;C:\Users\alder_000\Documents\Arduino\libraries;D:\Arduino\hardware\tools\avr/avr/include/;D:\Arduino\hardware\tools\avr//avr/include/avr/;D:\Arduino\hardware\tools\avr/lib\gcc\avr\4.8.1\include;G:\PRO\Repos\Moloko\Moloko;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>C:\Users\alder_000\Documents\Arduino\libraries\PID;D:\Arduino\hardware\arduino\avr\libraries\Wire\src;C:\Users\alder_000\Documents\Arduino\libraries\PID\utility;D:\Arduino\hardware\arduino\avr\libraries\Wire\src\utility;D:\Arduino\libraries;D:\Arduino\hardware\arduino\avr\libraries;C:\Users\alder_000\Documents\Arduino\libraries;D:\Arduino\hardware\arduino\avr\cores\arduino;D:\Arduino\hardware\arduino\avr\variants\standard;C:\Users\alder_000\Source\Repos\Holodino\Holodino.Thermostat;D:\Arduino\hardware\arduino\avr\cores\arduino;D:\Arduino\hardware\arduino\avr\variants\standard;C:\Users\alder_000\Documents\Arduino\libraries\PID;D:\Arduino\hardware\arduino\avr\libraries\Wire\src;D:\Arduino\libraries;D:\Arduino\hardware\arduino\avr\libraries;G:\VS2015\Common7\IDE\Extensions\rbseqz3p.00g\Micro Platforms\default\debuggers;C:\Users\alder_000\Documents\Arduino\libraries;D:\Arduino\hardware\tools\avr/avr/include/;D:\Arduino\hardware\tools\avr//avr/include/avr/;D:\Arduino\hardware\tools\avr/lib\gcc\avr\4.8.1\include;G:\PRO\Repos\Moloko\Moloko;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <ForcedIncludeFiles>C:\Users\alder_000\Source\Repos\Holodino\Holodino.Thermostat\__vm\.Holodino.Thermostat.vsarduino.h;%(ForcedIncludeFiles)</ForcedIncludeFiles>
       <IgnoreStandardIncludePath>false</IgnoreStandardIncludePath>
       <PreprocessorDefinitions>__AVR_ATmega328p__;__AVR_ATmega328P__;F_CPU=16000000L;ARDUINO=106010;ARDUINO_AVR_UNO;ARDUINO_ARCH_AVR;__cplusplus=201103L;%(PreprocessorDefinitions)</PreprocessorDefinitions>
@@ -78,8 +78,12 @@
   <ItemGroup>
     <ClInclude Include="G:\PRO\Repos\Moloko\Moloko\cfg_eeprom.h" />
     <ClInclude Include="G:\PRO\Repos\Moloko\Moloko\log_serial.h" />
+    <ClInclude Include="Sodaq_DS3231_mod.h" />
     <ClInclude Include="wifi_esp8266.h" />
     <ClInclude Include="__vm\.Holodino.Thermostat.vsarduino.h" />
+  </ItemGroup>
+  <ItemGroup>
+    <ClCompile Include="Sodaq_DS3231_mod.cpp" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Label="ExtensionTargets">

@@ -29,7 +29,8 @@ typedef unsigned long     msec;
 #else
 	#ifdef TEMP_RTC
 		// TEMPERATURE FROM RTC MODULE
-		#include <Sodaq_DS3231.h>
+		#include <Wire.h>
+		#include "Sodaq_DS3231_mod.h"
 	#endif
 	#ifdef TEMP_DALLAS
 		// TEMPERATURE SENSOR 1-WIRE PIN
