@@ -2,7 +2,6 @@
 #include <PID_v1.h>
 #include "log_serial.h"
 //#include "wifi_esp8266.h"
-//#include <Sodaq_DS3231.h>
 
 #define PRODUCT       "HOLODINO"
 
@@ -18,20 +17,28 @@
 typedef   signed long      sec;
 typedef unsigned long     msec;
 
-#define TEST_MODE
+#define TEMP_RTC
+//#define TEMP_DALLAS
+//#define TEST_MODE
 #ifdef TEST_MODE
 	// TEST PARAMETERS
 	#define TIME_SPEED     10.00
-	#define TEMP_INITIAL +20.00
+	#define TEMP_INITIAL  +20.00
 	#define TEMP_RATE_ON  -0.020
 	#define TEMP_RATE_OFF  0.010
 #else
-	// TEMPERATURE SENSOR 1-WIRE PIN
-	#define INPUT_PIN		  2
-	#include <OneWire.h>
-	#include <DallasTemperature.h>
-	OneWire temperature_wire(INPUT_PIN); // Setup a oneWire instance to communicate with any OneWire devices (not just Maxim/Dallas temperature ICs)
-	DallasTemperature temperature(&temperature_wire); // Pass our oneWire reference to Dallas Temperature. 
+	#ifdef TEMP_RTC
+		// TEMPERATURE FROM RTC MODULE
+		#include <Sodaq_DS3231.h>
+	#endif
+	#ifdef TEMP_DALLAS
+		// TEMPERATURE SENSOR 1-WIRE PIN
+		#define INPUT_PIN		  2
+		#include <OneWire.h>
+		#include <DallasTemperature.h>
+		OneWire temperature_wire(INPUT_PIN); // Setup a oneWire instance to communicate with any OneWire devices (not just Maxim/Dallas temperature ICs)
+		DallasTemperature temperature(&temperature_wire); // Pass our oneWire reference to Dallas Temperature. 
+    #endif
 #endif
 
 // OUTPUT: MOTOR RELAY SIGNAL PIN#
@@ -268,23 +275,48 @@ private:
 
 #ifndef TEST_MODE
 
-class ControllerRTC : public Controller {
-public:
-    ControllerRTC() :
-        Controller(1.0, WINDOW_SIZE, START_DELAY, OUTPUT_PIN) {
-    }
-	virtual bool Init() {
-		if (!Controller::Init()) return false;
-		temperature.begin();
-		return true; 
+#ifdef TEMP_DALLAS
+
+	class ControllerDallas : public Controller {
+	public:
+		ControllerDallas() :
+			Controller(1.0, WINDOW_SIZE, START_DELAY, OUTPUT_PIN) {
+		}
+		virtual bool Init() {
+			if (!Controller::Init()) return false;
+			temperature.begin();
+			return true; 
+		}
+		virtual bool Input(double &t) {
+			temperature.requestTemperatures();
+			t = temperature.getTempCByIndex(0);
+			return t > -100.0;
+		}
 	}
-    virtual bool Input(double &t) {
-		temperature.requestTemperatures();
-        t = temperature.getTempCByIndex(0);
-        return t > -100.0;
-    }
-}
-holod;
+	holod;
+
+#endif
+
+#ifdef TEMP_RTC
+
+	class ControllerRTC : public Controller {
+	public:
+		ControllerRTC() :
+			Controller(1.0, WINDOW_SIZE, START_DELAY, OUTPUT_PIN) {
+		}
+		virtual bool Init() {
+			if (!Controller::Init() || !rtc.begin() || !rtc.convertTemperature()) return false;
+			return true;
+		}
+		virtual bool Input(double &temp) {
+			if (!rtc.convertTemperature()) return false;
+			temp = rtc.getTemperature();
+			return true;
+		}
+	}
+	holod;
+
+#endif
 
 #else
 
